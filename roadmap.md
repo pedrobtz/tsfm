@@ -75,6 +75,10 @@ preprocessing, and forecast contracts end-to-end.
 - **Batched panel inference** (`batching.R`): key-batched, chunked, device-aware.
 - **parsnip spec** `tsfm_reg()` + engine registration (`parsnip.R`).
 - Vignette: *"Zero-shot forecasting in a workflow."*
+- Vignette: *"Forecasting retail demand with covariates"* — TTM on a daily/weekly
+  retail panel with `price`/`promo` past + known-future covariates
+  (`tsibbledata::aus_retail`-style data), showcasing the exogenous-covariate
+  path and multi-series batching.
 
 **Exit criterion**
 - TTM numerical-parity tests green against the reference Python implementation
@@ -94,6 +98,9 @@ Ship the most-requested missing model and take the package public.
 - **`tunable()` / `dials` parameters** (context length, quantile levels).
 - Rolling-origin vignette with `tune_grid()` over `rsample::sliding_period()`
   (plus `modeltime.resample`).
+- Vignette: *"Long-context forecasting of high-frequency demand"* — TimesFM 2.5
+  on half-hourly electricity (`tsibbledata::vic_elec`), showcasing long context
+  windows and intraday/weekly seasonality where more history helps.
 - **First CRAN submission** (download-on-first-use with size message;
   `skip_on_cran()` for anything touching the Hub; parity tests off fixtures).
 
@@ -117,6 +124,10 @@ covariate/multivariate story.
 - **Multivariate targets** end-to-end (declared by passing multiple target
   columns; capability check rejects unsupported models pre-flight).
 - Conformal vignette with `conformalForecast`.
+- Vignette: *"Hierarchical forecasting with calibrated quantiles"* — Chronos-2 on
+  quarterly Australian tourism (`tsibble::tourism`), showcasing native quantile
+  output flowing into `fabletools::reconcile()` for coherent hierarchical
+  forecasts and prediction intervals.
 - `as_modeltime_table()` adapter fully exercised.
 
 **Exit criterion**
@@ -143,6 +154,19 @@ Darts (4 models) and skforecast (6 families).
 - Fine-tuned TTM beats zero-shot on a held-out benchmark.
 
 ---
+
+## Example vignettes (one per headline capability)
+
+Beyond the mechanics vignettes, three worked examples each demonstrate one
+capability on a real, R-available dataset. They ship with the stage that lands
+the model they use, and each example's input doubles as a golden-fixture case
+for that model's parity tests.
+
+| Vignette | Stage | Model | Capability shown | Dataset |
+|----------|-------|-------|------------------|---------|
+| Forecasting retail demand with covariates | 1 | TTM | past + known-future covariates, panel batching | retail (`tsibbledata::aus_retail`-style, with `price`/`promo`) |
+| Long-context forecasting of high-frequency demand | 2 | TimesFM 2.5 | long context, intraday/weekly seasonality | half-hourly electricity (`tsibbledata::vic_elec`) |
+| Hierarchical forecasting with calibrated quantiles | 3 | Chronos-2 | native quantiles → reconciliation | quarterly tourism (`tsibble::tourism`) |
 
 ## Cross-cutting concerns (every stage)
 
