@@ -1,0 +1,64 @@
+# The architecture registry maps an architecture key (as found in a
+# checkpoint's config.json) to a constructor that turns a parsed config plus a
+# weight state-dict into a `tsfm_model`. Third parties can register additional
+# architectures without modifying this package, which keeps the catalogue open.
+
+.tsfm_registry <- new.env(parent = emptyenv())
+
+#' Register a model architecture
+#'
+#' Associates an architecture key with a constructor. The constructor must have
+#' the signature `function(config, weights)` and return a [new_tsfm_model()].
+#'
+#' @param architecture Character scalar key (matched against `config.json`).
+#' @param constructor A function `function(config, weights)`.
+#' @param overwrite Logical; if `FALSE` (default) re-registering an existing key
+#'   errors.
+#' @return Invisibly, the architecture key.
+#' @export
+tsfm_register_arch <- function(architecture, constructor, overwrite = FALSE) {
+  architecture <- as.character(architecture)
+  if (!is.function(constructor)) {
+    cli::cli_abort("{.arg constructor} must be a function of {.code (config, weights)}.")
+  }
+  if (!isTRUE(overwrite) && tsfm_registry_has(architecture)) {
+    cli::cli_abort(c(
+      "Architecture {.val {architecture}} is already registered.",
+      "i" = "Pass {.code overwrite = TRUE} to replace it."
+    ))
+  }
+  assign(architecture, constructor, envir = .tsfm_registry)
+  invisible(architecture)
+}
+
+#' @rdname tsfm_register_arch
+#' @export
+tsfm_registry_has <- function(architecture) {
+  exists(as.character(architecture), envir = .tsfm_registry, inherits = FALSE)
+}
+
+#' @rdname tsfm_register_arch
+#' @export
+tsfm_registry_archs <- function() {
+  sort(ls(envir = .tsfm_registry))
+}
+
+# Fetch a constructor, with a helpful error listing what *is* available.
+tsfm_registry_get <- function(architecture, call = rlang::caller_env()) {
+  architecture <- as.character(architecture)
+  if (!tsfm_registry_has(architecture)) {
+    available <- tsfm_registry_archs()
+    cli::cli_abort(
+      c(
+        "No constructor registered for architecture {.val {architecture}}.",
+        "i" = if (length(available)) {
+          "Registered architectures: {.val {available}}."
+        } else {
+          "No architectures are registered."
+        }
+      ),
+      call = call
+    )
+  }
+  get(architecture, envir = .tsfm_registry, inherits = FALSE)
+}
