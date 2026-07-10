@@ -11,21 +11,35 @@ tsfm_default_batch_size <- function() {
   as.integer(getOption("tsfm.batch_size", 64L))
 }
 
+# Validate a device string. Accepts "auto", "cpu", "mps", "cuda", and indexed
+# CUDA devices like "cuda:1".
+is_valid_device <- function(device) {
+  length(device) == 1L && is.character(device) &&
+    grepl("^(auto|cpu|mps|cuda(:[0-9]+)?)$", device)
+}
+
 #' Resolve a compute device
 #'
-#' Returns a device string for torch models. `"auto"` (the default, overridable
-#' with `options(tsfm.device = ...)`) picks CUDA, then MPS, then CPU, based on
-#' what the installed torch backend reports. Without torch it is always
+#' Returns a concrete device string for torch models. `"auto"` (the default,
+#' overridable with `options(tsfm.device = ...)`) picks CUDA, then MPS, then CPU,
+#' based on what the installed torch backend reports, and warns if a requested
+#' accelerator is unavailable, falling back to CPU. Without torch it is always
 #' `"cpu"`, so the stub path never touches torch.
 #'
-#' @param device One of `"auto"`, `"cpu"`, `"cuda"`, `"mps"`, or `NULL` to read
-#'   the option.
-#' @return A device string.
+#' @param device One of `"auto"`, `"cpu"`, `"mps"`, `"cuda"`, `"cuda:N"`, or
+#'   `NULL` to read the `tsfm.device` option.
+#' @return A concrete device string (never `"auto"`).
 #' @export
 tsfm_resolve_device <- function(device = NULL) {
   device <- device %||% getOption("tsfm.device", "auto")
+  if (!is_valid_device(device)) {
+    cli::cli_abort(c(
+      "Invalid {.arg device}: {.val {device}}.",
+      "i" = "Use one of {.val auto}, {.val cpu}, {.val mps}, {.val cuda}, or {.val cuda:N}."
+    ))
+  }
   if (!identical(device, "auto")) {
-    return(device)
+    return(validate_available_device(device))
   }
   if (!requireNamespace("torch", quietly = TRUE)) {
     return("cpu")
@@ -37,6 +51,56 @@ tsfm_resolve_device <- function(device = NULL) {
     return("mps")
   }
   "cpu"
+}
+
+# For an explicitly requested accelerator, confirm the backend actually has it;
+# warn and fall back to CPU rather than erroring deep in a forward pass.
+validate_available_device <- function(device) {
+  backend <- sub(":.*$", "", device)
+  if (backend == "cpu" || !requireNamespace("torch", quietly = TRUE)) {
+    return(device)
+  }
+  available <- switch(
+    backend,
+    cuda = isTRUE(tryCatch(torch::cuda_is_available(), error = function(e) FALSE)),
+    mps  = isTRUE(tryCatch(torch::backends_mps_is_available(), error = function(e) FALSE)),
+    TRUE
+  )
+  if (!available) {
+    cli::cli_warn(c(
+      "Requested device {.val {device}} is not available; falling back to {.val cpu}.",
+      "i" = "Check your torch installation and drivers."
+    ))
+    return("cpu")
+  }
+  device
+}
+
+#' Set or get the default tsfm compute device
+#'
+#' Thin wrapper over the `tsfm.device` option consulted by
+#' [tsfm_resolve_device()].
+#'
+#' @param device A device string, or `NULL` to only read the current setting.
+#' @return Invisibly, the previous option value.
+#' @export
+tsfm_set_device <- function(device) {
+  if (!is_valid_device(device)) {
+    cli::cli_abort("Invalid {.arg device}: {.val {device}}.")
+  }
+  old <- getOption("tsfm.device", "auto")
+  options(tsfm.device = device)
+  invisible(old)
+}
+
+# Move a torch tensor or module to a device. No-op fallback keeps non-torch
+# code paths (the stub) working; native architectures call this in their
+# forward pass.
+tsfm_to_device <- function(x, device) {
+  if (!requireNamespace("torch", quietly = TRUE)) {
+    return(x)
+  }
+  x$to(device = torch::torch_device(device))
 }
 
 #' Run a model over many series in batches

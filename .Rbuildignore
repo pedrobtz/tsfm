@@ -5,3 +5,7 @@
 ^roadmap\.md$
 ^LICENSE\.md$
 ^\.claude$
+^cran-comments\.md$
+^CRAN-SUBMISSION$
+^\.venv$
+^scratch$

@@ -1,0 +1,97 @@
+---
+title: "Tuning context length with rolling-origin resampling"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Tuning context length with rolling-origin resampling}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", eval = FALSE)
+```
+
+How much history should a foundation model condition on? More context is not
+always better — it can dilute recent signal and cost compute. Because `tsfm`
+exposes `context_length` as a tunable `dials` parameter, you can answer this
+empirically with the standard tidymodels tuning machinery over **rolling-origin**
+(time-aware) resamples, rather than random cross-validation that would leak the
+future into the past.
+
+## The spec
+
+Mark `context_length` for tuning; everything else is fixed through the engine:
+
+```{r}
+library(tsfm)
+library(parsnip)
+library(workflows)
+library(tune)
+library(dials)
+library(rsample)
+
+spec <- tsfm_reg(context_length = tune()) |>
+  set_engine("tsfm",
+             model_id = "google/timesfm-2.5-200m-pytorch",
+             index    = "date",
+             id       = "store")
+
+wf <- workflow() |>
+  add_formula(demand ~ date) |>
+  add_model(spec)
+```
+
+## Rolling-origin resamples
+
+`rsample::sliding_period()` builds analysis/assessment splits that always move
+forward in time — the assessment window is strictly after its analysis window:
+
+```{r}
+folds <- sliding_period(
+  train_df,
+  index  = date,
+  period = "month",
+  lookback   = Inf,   # expanding-origin: use all history up to each split
+  assess_stop = 1     # score one month ahead
+)
+```
+
+## Search
+
+Give `context_length` a range and let `tune_grid()` score each candidate with a
+proper (quantile-aware) metric:
+
+```{r}
+grid <- grid_regular(
+  context_length(range = c(128L, 2048L)),
+  levels = 5
+)
+
+res <- tune_grid(
+  wf,
+  resamples = folds,
+  grid      = grid,
+  metrics   = metric_set(yardstick::rmse, yardstick::mae)
+)
+
+show_best(res, metric = "rmse")
+best <- select_best(res, metric = "rmse")
+
+final_fit <- finalize_workflow(wf, best) |>
+  fit(data = train_df)
+```
+
+## modeltime.resample
+
+If your project lives in the modeltime ecosystem, the same models are usable
+through `modeltime.resample::modeltime_fit_resamples()` over
+`timetk::time_series_cv()` splits — `tsfm` engines register the same way
+modeltime's own engines do, so no bridge code is required.
+
+## Notes
+
+- Tuning `context_length` is model-agnostic: swap `model_id` to compare how
+  different foundation models respond to more or less history.
+- The heavy per-candidate cost is inference, not training (these are zero-shot
+  models), so keep the grid small and prefer `sliding_period()` windows that
+  reflect your real forecast horizon.

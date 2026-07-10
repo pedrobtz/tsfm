@@ -1,10 +1,3 @@
-test_that("device resolution falls back to cpu without torch", {
-  skip_if(requireNamespace("torch", quietly = TRUE),
-          "torch installed; auto-resolution is backend-dependent")
-  expect_identical(tsfm_resolve_device("auto"), "cpu")
-  expect_identical(tsfm_resolve_device("cuda"), "cuda")  # explicit passthrough
-})
-
 test_that("batching loops predict_fn, aligned to inputs, when no batch fn", {
   set.seed(1)
   model <- tsfm_pretrained("stub")

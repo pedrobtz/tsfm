@@ -10,9 +10,11 @@ Hub access at run time.
 
 ```
 fixtures/
-└── ttm/
+├── ttm/
+│   ├── case-01.json
+│   └── ...
+└── timesfm/
     ├── case-01.json
-    ├── case-02.json
     └── ...
 ```
 
@@ -33,7 +35,8 @@ fixtures/
 ## Generating fixtures (once the numerical port is ready)
 
 Fixtures are produced **outside CI**, in an environment with the Hub checkpoint,
-torch, and the reference `granite-tsfm` Python package, then committed:
+torch, and the model's reference Python package (`granite-tsfm` for TTM,
+`timesfm` for TimesFM), then committed:
 
 1. Pin the checkpoint revision to a commit SHA (never a moving branch).
 2. For each case, run the reference Python model on the `context` and record its

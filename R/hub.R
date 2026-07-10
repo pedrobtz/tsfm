@@ -96,6 +96,9 @@ normalize_architecture <- function(config) {
     tinytimemixer              = "ttm",
     tinytimemixerforprediction = "ttm",
     ttm                        = "ttm",
+    timesfm                    = "timesfm",
+    timesfmmodelforprediction  = "timesfm",
+    patchedtimeseriesdecoder   = "timesfm",
     chronos                    = "chronos2",
     chronosbolt                = "chronos2",
     chronos2                   = "chronos2"

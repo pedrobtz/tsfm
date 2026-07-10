@@ -1,5 +1,5 @@
-test_that("all Stage 1 architectures are registered", {
-  expect_true(all(c("stub", "ttm", "chronos2") %in% tsfm_registry_archs()))
+test_that("all built-in architectures are registered", {
+  expect_true(all(c("stub", "ttm", "timesfm", "chronos2") %in% tsfm_registry_archs()))
 })
 
 test_that("architecture keys are normalised from Hub config conventions", {
@@ -7,6 +7,11 @@ test_that("architecture keys are normalised from Hub config conventions", {
   expect_identical(
     normalize_architecture(list(architectures = "TinyTimeMixerForPrediction")),
     "ttm"
+  )
+  expect_identical(normalize_architecture(list(model_type = "TimesFM")), "timesfm")
+  expect_identical(
+    normalize_architecture(list(architectures = "PatchedTimeSeriesDecoder")),
+    "timesfm"
   )
   expect_identical(normalize_architecture(list(model_type = "ChronosBolt")), "chronos2")
   expect_identical(normalize_architecture(list(model_type = "PatchTST")), "patchtst")
@@ -34,5 +39,17 @@ test_that("TTM scaffold advertises capabilities but defers the forward pass", {
   expect_true(caps$fine_tunable)
   expect_identical(caps$license, "Apache-2.0")
   # Numerical port not done: forward pass must error, not fabricate output.
+  expect_error(model$predict_fn(1:10, 3, c(0.1, 0.5, 0.9)), "not implemented")
+})
+
+test_that("TimesFM scaffold advertises capabilities but defers the forward pass", {
+  model <- timesfm_constructor(list(context_length = 2048L))
+  expect_identical(model$architecture, "timesfm")
+  caps <- tsfm_capabilities(model)
+  expect_identical(caps$max_context, 2048L)
+  expect_false(caps$multivariate)      # univariate targets
+  expect_true(caps$fine_tunable)
+  expect_identical(caps$quantiles, "native")
+  expect_identical(caps$license, "Apache-2.0")
   expect_error(model$predict_fn(1:10, 3, c(0.1, 0.5, 0.9)), "not implemented")
 })
