@@ -108,9 +108,16 @@ make_tsfm_reg <- function() {
     )
   )
 
-  # tunable() lives on a parsnip generic; register without a static S3method so
-  # parsnip stays an optional dependency.
-  rlang::s3_register("parsnip::tunable", "tsfm_reg", tunable_tsfm_reg)
+  # The tunable() generic is re-exported across the tidymodels stack from a
+  # single home (historically `generics`); register against whichever installed
+  # package actually owns it, so dispatch works regardless of version.
+  for (pkg in c("generics", "hardhat", "tune", "parsnip")) {
+    if (requireNamespace(pkg, quietly = TRUE) &&
+        exists("tunable", envir = asNamespace(pkg), inherits = FALSE)) {
+      rlang::s3_register(paste0(pkg, "::tunable"), "tsfm_reg", tunable_tsfm_reg)
+      break
+    }
+  }
   invisible()
 }
 

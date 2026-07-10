@@ -57,7 +57,9 @@ tsfm_infer <- function(model, histories, future_index, quantile_levels,
   req_cols <- match(quantile_levels, levels)
   dist <- build_distribution(qmatrix[, req_cols, drop = FALSE], quantile_levels)
 
-  df <- data.frame(check.names = FALSE, stringsAsFactors = FALSE)
+  # Build an n-row, 0-column frame first so column assignment sets the rows
+  # (assigning a length-n vector into a 0-row frame errors).
+  df <- data.frame(matrix(nrow = length(key_vec), ncol = 0))
   df[[key_name]] <- key_vec
   df[[index_name]] <- idx_vec
   df[[".mean"]] <- mean_vec

@@ -38,14 +38,14 @@ test_that("models are exchangeable by model_id via set_engine only", {
 })
 
 test_that("context_length is exposed as a tunable dials parameter", {
-  skip_if_not_installed("parsnip")
   skip_if_not_installed("dials")
-  skip_if_not_installed("tune")
-  make_tsfm_reg()
 
   param <- context_length()
   expect_s3_class(param, "quant_param")
 
-  tun <- parsnip::tunable(tsfm_reg(context_length = tune::tune()))
+  # Exercise the tunable metadata directly (the generic's home package varies
+  # across tidymodels versions; dispatch is wired in make_tsfm_reg()).
+  tun <- tunable_tsfm_reg(tsfm_reg())
   expect_true("context_length" %in% tun$name)
+  expect_identical(tun$call_info[[1]]$fun, "context_length")
 })

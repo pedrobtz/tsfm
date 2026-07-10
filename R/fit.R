@@ -56,11 +56,14 @@ tsfm_fit_data_frame <- function(data, model, target, index, id,
     cli::cli_abort("Column{?s} {.val {missing}} not found in {.arg data}.")
   }
 
-  # hardhat mold of an outcome-only formula: validates the target is a numeric
-  # outcome and yields a blueprint reused by predict() for consistent handling.
-  blueprint <- hardhat::default_formula_blueprint(intercept = FALSE)
-  molded <- hardhat::mold(stats::reformulate("1", response = target), data,
-                          blueprint = blueprint)
+  # hardhat XY mold: validates/standardises the target as an outcome and yields
+  # a blueprint reused by predict(). The XY interface (rather than a formula)
+  # sidesteps intercept handling, and non-target columns ride along as
+  # predictors for the covariate roles a later stage will consume.
+  molded <- hardhat::mold(
+    x = data[, setdiff(names(data), target), drop = FALSE],
+    y = data[, target, drop = FALSE]
+  )
   y <- molded$outcomes[[1]]
   if (!is.numeric(y)) {
     cli::cli_abort("Target {.val {target}} must be numeric; got {.cls {class(y)}}.")
