@@ -17,6 +17,12 @@
 #' @param model_id,revision Provenance of the checkpoint.
 #' @param params Optional opaque parameter/state object (e.g. a torch module);
 #'   `NULL` for the weight-free stub.
+#' @param predict_batch_fn Optional vectorised forward pass for true batched
+#'   inference: `function(contexts, horizons, quantile_levels, device)` where
+#'   `contexts`/`horizons` are lists aligned by series, returning a list of
+#'   per-series quantile matrices. When `NULL`, [tsfm_run_batches()] falls back
+#'   to looping `predict_fn`. Native torch architectures supply this; the stub
+#'   does not.
 #' @return A `tsfm_model` object.
 #' @export
 new_tsfm_model <- function(architecture,
@@ -25,22 +31,27 @@ new_tsfm_model <- function(architecture,
                            predict_fn,
                            model_id = NA_character_,
                            revision = NA_character_,
-                           params = NULL) {
+                           params = NULL,
+                           predict_batch_fn = NULL) {
   if (!inherits(capabilities, "tsfm_capabilities")) {
     cli::cli_abort("{.arg capabilities} must be a {.cls tsfm_capabilities} object.")
   }
   if (!is.function(predict_fn)) {
     cli::cli_abort("{.arg predict_fn} must be a function.")
   }
+  if (!is.null(predict_batch_fn) && !is.function(predict_batch_fn)) {
+    cli::cli_abort("{.arg predict_batch_fn} must be a function or {.code NULL}.")
+  }
   structure(
     list(
-      architecture = as.character(architecture),
-      config       = config,
-      capabilities = capabilities,
-      predict_fn   = predict_fn,
-      model_id     = as.character(model_id),
-      revision     = as.character(revision),
-      params       = params
+      architecture     = as.character(architecture),
+      config           = config,
+      capabilities     = capabilities,
+      predict_fn       = predict_fn,
+      predict_batch_fn = predict_batch_fn,
+      model_id         = as.character(model_id),
+      revision         = as.character(revision),
+      params           = params
     ),
     class = "tsfm_model"
   )

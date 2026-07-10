@@ -1,0 +1,38 @@
+test_that("all Stage 1 architectures are registered", {
+  expect_true(all(c("stub", "ttm", "chronos2") %in% tsfm_registry_archs()))
+})
+
+test_that("architecture keys are normalised from Hub config conventions", {
+  expect_identical(normalize_architecture(list(model_type = "TinyTimeMixer")), "ttm")
+  expect_identical(
+    normalize_architecture(list(architectures = "TinyTimeMixerForPrediction")),
+    "ttm"
+  )
+  expect_identical(normalize_architecture(list(model_type = "ChronosBolt")), "chronos2")
+  expect_identical(normalize_architecture(list(model_type = "PatchTST")), "patchtst")
+})
+
+test_that("chronos-2 ids route to the adapter without a network call", {
+  expect_true(is_chronos2_id("amazon/chronos-2"))
+  expect_true(is_chronos2_id("amazon/chronos2"))
+  expect_false(is_chronos2_id("google/timesfm-2.5-200m-pytorch"))
+
+  model <- tsfm_pretrained("amazon/chronos-2")
+  expect_identical(model$architecture, "chronos2")
+  caps <- tsfm_capabilities(model)
+  expect_identical(caps$max_context, 8192L)
+  expect_false(caps$fine_tunable)      # brulee frozen weights
+  expect_false(caps$multivariate)      # native multivariate arrives in Stage 3
+})
+
+test_that("TTM scaffold advertises capabilities but defers the forward pass", {
+  model <- ttm_constructor(list(context_length = 1536L))
+  expect_identical(model$architecture, "ttm")
+  caps <- tsfm_capabilities(model)
+  expect_identical(caps$max_context, 1536L)
+  expect_true(caps$multivariate)
+  expect_true(caps$fine_tunable)
+  expect_identical(caps$license, "Apache-2.0")
+  # Numerical port not done: forward pass must error, not fabricate output.
+  expect_error(model$predict_fn(1:10, 3, c(0.1, 0.5, 0.9)), "not implemented")
+})

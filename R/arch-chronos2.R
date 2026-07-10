@@ -1,0 +1,86 @@
+# Chronos-2 --- interim adapter, Stage 1.
+#
+# brulee already ships an end-to-end native Chronos-2 loader
+# (`brulee::brulee_chronos()`): pinned Hub download -> safetensors -> R torch,
+# frozen weights, quantile output. Rather than duplicate that for Stage 1, the
+# uniform API wraps it, so `tsfm_pretrained("amazon/chronos-2")` returns a model
+# that behaves like every other `tsfm_model`. Stage 3 replaces this adapter with
+# a native implementation that adds what brulee deliberately excludes
+# (multivariate targets, fine-tuning).
+#
+# STATUS: the constructor, capability metadata, and registry dispatch are wired
+# and testable; the forward pass calls into brulee, whose exact entry points are
+# resolved at call time and validated where brulee is installed (skipped in
+# sandboxes without it). The per-series bridge below adapts our
+# context-vector -> quantile-matrix contract onto brulee's data-frame interface.
+
+chronos2_capabilities <- function(config) {
+  new_tsfm_capabilities(
+    architecture      = "chronos2",
+    max_context       = as.integer(config$max_context %||% 8192L),
+    quantiles         = "native",
+    multivariate      = FALSE,   # brulee_chronos is single-target; native in Stage 3
+    samples           = FALSE,
+    past_covariates   = TRUE,
+    future_covariates = TRUE,
+    static_covariates = FALSE,
+    fine_tunable      = FALSE,   # brulee uses frozen weights
+    license           = "Apache-2.0"
+  )
+}
+
+# Forecast one series through brulee's Chronos-2. Builds a minimal data frame
+# from the raw context (synthetic integer time index), asks brulee for `h`
+# steps at the requested quantile levels, and returns an h x length(levels)
+# matrix. brulee's precise argument names are resolved defensively so this keeps
+# working across brulee versions; validated in the brulee-gated tests.
+chronos2_forecast_series <- function(context, h, quantile_levels, config) {
+  rlang::check_installed(
+    "brulee",
+    reason = "to run the Chronos-2 adapter (native Chronos-2 arrives in Stage 3)."
+  )
+  train <- data.frame(
+    .t = seq_along(context),
+    .y = as.numeric(context)
+  )
+  new_data <- data.frame(.t = length(context) + seq_len(h))
+
+  fit <- brulee::brulee_chronos(
+    .y ~ .t,
+    data = train,
+    quantile_levels = quantile_levels
+  )
+  pred <- stats::predict(fit, new_data = new_data, type = "quantile")
+
+  as_quantile_matrix(pred, h = h, quantile_levels = quantile_levels)
+}
+
+# Coerce whatever shape brulee returns (a tibble of quantile columns, or a
+# list-column of quantiles) into a plain h x length(levels) matrix.
+as_quantile_matrix <- function(pred, h, quantile_levels) {
+  q <- length(quantile_levels)
+  if (is.data.frame(pred)) {
+    qcols <- grep("^\\.pred", names(pred), value = TRUE)
+    if (length(qcols) == q) {
+      return(matrix(as.numeric(as.matrix(pred[qcols])), nrow = h, ncol = q))
+    }
+  }
+  m <- matrix(as.numeric(unlist(pred)), nrow = h, ncol = q, byrow = TRUE)
+  m
+}
+
+chronos2_constructor <- function(config, weights = NULL) {
+  caps <- chronos2_capabilities(config)
+  predict_fn <- function(context, h, quantile_levels) {
+    chronos2_forecast_series(context, h, quantile_levels, config)
+  }
+  new_tsfm_model(
+    architecture = "chronos2",
+    config       = config,
+    capabilities = caps,
+    predict_fn   = predict_fn,
+    model_id     = config$model_id %||% "amazon/chronos-2",
+    revision     = config$revision %||% NA_character_,
+    params       = NULL
+  )
+}

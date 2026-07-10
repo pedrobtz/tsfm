@@ -30,19 +30,23 @@ Imports:
     safetensors,
     torch
 Suggests:
+    brulee,
     conformalForecast,
     dials,
     fable,
     fabletools,
     ggplot2,
     jsonlite,
+    knitr,
     modeltime,
     parsnip,
     recipes,
+    rmarkdown,
     rsample,
     testthat (>= 3.0.0),
     tsibble,
     tune,
     workflows,
     yardstick
+VignetteBuilder: knitr
 Config/testthat/edition: 3

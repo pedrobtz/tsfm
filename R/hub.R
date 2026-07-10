@@ -31,6 +31,12 @@ is_stub_id <- function(model_id) {
   identical(model_id, "stub") || grepl("^stub([-/]|$)", model_id)
 }
 
+# Chronos-2 is served through the brulee-backed adapter (roadmap Stage 1), which
+# manages its own download, so it short-circuits the generic config fetch.
+is_chronos2_id <- function(model_id) {
+  grepl("chronos-?2", model_id, ignore.case = TRUE)
+}
+
 # Return list(config = <parsed config, incl. `architecture`>, weights = <state
 # dict or NULL>). The stub branch is self-contained; the real branch is the
 # hfhub plumbing that Stage 1's native architectures build on.
@@ -41,6 +47,15 @@ tsfm_resolve_config <- function(model_id, revision, ..., call = rlang::caller_en
       model_id     = model_id,
       revision     = revision,
       max_context  = 512L
+    )
+    return(list(config = config, weights = NULL))
+  }
+
+  if (is_chronos2_id(model_id)) {
+    config <- list(
+      architecture = "chronos2",
+      model_id     = model_id,
+      revision     = revision
     )
     return(list(config = config, weights = NULL))
   }
@@ -69,11 +84,22 @@ jsonlite_read <- function(path) {
 
 # Map a Hub config to our architecture key. Hugging Face configs expose either a
 # top-level `architectures` array (transformers convention) or a `model_type`
-# field; different TSFMs use different conventions, so both are handled.
+# field; different TSFMs use different conventions, so both are handled, then
+# normalised through a small alias table to the keys used in the registry.
 normalize_architecture <- function(config) {
   arch <- config$architecture %||% config$model_type %||% config$architectures[1]
   if (is.null(arch) || is.na(arch)) {
     cli::cli_abort("Could not determine the architecture from the checkpoint config.")
   }
-  tolower(as.character(arch)[1])
+  arch <- tolower(as.character(arch)[1])
+  aliases <- c(
+    tinytimemixer              = "ttm",
+    tinytimemixerforprediction = "ttm",
+    ttm                        = "ttm",
+    chronos                    = "chronos2",
+    chronosbolt                = "chronos2",
+    chronos2                   = "chronos2"
+  )
+  mapped <- aliases[arch]
+  if (is.na(mapped)) arch else unname(mapped)
 }

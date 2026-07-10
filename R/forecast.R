@@ -13,38 +13,35 @@
 
 # histories:    named list (by key) of numeric vectors, oldest-first.
 # future_index: named list (by key) of future index values, one per horizon.
+# The actual forward pass (truncation, batching, device) is delegated to
+# tsfm_run_batches(); this driver only assembles the forecast object.
 # Returns a `tsfm_forecast`.
 tsfm_infer <- function(model, histories, future_index, quantile_levels,
                        key_name = "key", index_name = "index",
-                       target = ".response") {
-  caps <- model$capabilities
+                       target = ".response",
+                       batch_size = NULL, device = NULL) {
   quantile_levels <- sort(unique(as.numeric(quantile_levels)))
   # Always evaluate the median so the point forecast is exact.
   levels <- sort(unique(c(quantile_levels, 0.5)))
   median_col <- match(0.5, levels)
 
   keys <- names(histories)
+  horizons <- vapply(keys, function(k) length(future_index[[k]]), integer(1))
+
+  qmats <- tsfm_run_batches(model, histories[keys], horizons, levels,
+                            batch_size = batch_size, device = device)
+
   key_out <- vector("list", length(keys))
   idx_out <- vector("list", length(keys))
   qmat_out <- vector("list", length(keys))
   mean_out <- vector("list", length(keys))
 
   for (i in seq_along(keys)) {
-    k <- keys[[i]]
-    ctx <- as.numeric(histories[[k]])
-    # Context truncation: keep the most recent `max_context` observations.
-    if (length(ctx) > caps$max_context) {
-      ctx <- utils::tail(ctx, caps$max_context)
-    }
-    idx <- future_index[[k]]
-    h <- length(idx)
+    h <- horizons[[i]]
     if (h == 0L) next
-
-    qmat <- model$predict_fn(ctx, h, levels)   # h x length(levels)
-    qmat <- matrix(as.numeric(qmat), nrow = h, ncol = length(levels))
-
-    key_out[[i]] <- rep(k, h)
-    idx_out[[i]] <- idx
+    qmat <- matrix(as.numeric(qmats[[i]]), nrow = h, ncol = length(levels))
+    key_out[[i]] <- rep(keys[[i]], h)
+    idx_out[[i]] <- future_index[[keys[[i]]]]
     qmat_out[[i]] <- qmat
     mean_out[[i]] <- qmat[, median_col]
   }
@@ -201,6 +198,7 @@ as_fable.tsfm_forecast <- function(x, ...) {
 #' @param quantile_levels Numeric vector of quantile levels in `(0, 1)`.
 #' @param index,key,target Column names; required for the `data.frame` method,
 #'   inferred for a `tsibble`.
+#' @param batch_size,device Passed to [tsfm_run_batches()].
 #' @param ... Unused.
 #' @return A `tsfm_forecast`.
 #' @export
@@ -212,7 +210,8 @@ forecast <- function(object, ...) {
 #' @export
 forecast.tsfm_model <- function(object, new_data, h = 1L,
                                 quantile_levels = c(0.1, 0.5, 0.9),
-                                index = NULL, key = NULL, target = NULL, ...) {
+                                index = NULL, key = NULL, target = NULL,
+                                batch_size = NULL, device = NULL, ...) {
   h <- as.integer(h)
   spec <- panel_spec(new_data, index = index, key = key, target = target)
 
@@ -226,7 +225,9 @@ forecast.tsfm_model <- function(object, new_data, h = 1L,
     quantile_levels = quantile_levels,
     key_name = spec$key,
     index_name = spec$index,
-    target = spec$target
+    target = spec$target,
+    batch_size = batch_size,
+    device = device
   )
 }
 
