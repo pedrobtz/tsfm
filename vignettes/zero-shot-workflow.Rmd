@@ -1,0 +1,121 @@
+---
+title: "Zero-shot forecasting in a workflow"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Zero-shot forecasting in a workflow}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", eval = FALSE)
+```
+
+`tsfm` gives every time-series foundation model one uniform, tidymodels-native
+interface. This vignette shows the two ways to forecast a panel of series, and
+the property that makes the package worth having: **swapping one foundation
+model for another means changing a single argument.**
+
+## Load a model
+
+`tsfm_pretrained()` resolves a model from the Hugging Face Hub (revision pinned)
+and returns a uniform handle. The same call works for every architecture:
+
+```{r}
+library(tsfm)
+
+model <- tsfm_pretrained("amazon/chronos-2")
+```
+
+Before doing any work, ask what the model can do. The capability report is
+checked *before* inference, so an unsupported request fails fast with a clear
+message instead of deep inside a tensor op:
+
+```{r}
+tsfm_capabilities(model)
+#> <tsfm_capabilities>
+#>   architecture:      chronos2
+#>   max_context:       8192        quantiles: native
+#>   multivariate:      FALSE       samples:   no
+#>   past_covariates:   TRUE        future_covariates: TRUE
+#>   static_covariates: FALSE       fine_tunable: FALSE
+#>   license:           Apache-2.0
+```
+
+## Path 1 — the `forecast()` convenience surface (tsibble)
+
+Hand a panel of history and a horizon; get a forecast object back that converts
+to a `fable` for the tidyverts accuracy/reconciliation stack:
+
+```{r}
+library(tsibble)
+
+fc <- forecast(model, tourism_history, h = 12,
+               quantile_levels = c(0.1, 0.5, 0.9))
+
+fc |>
+  as_fable() |>
+  fabletools::accuracy(tourism_actuals)
+```
+
+## Path 2 — the tidymodels workflow (canonical)
+
+The canonical path is a `parsnip` spec inside a `workflow()`. The model is chosen
+by the engine's `model_id`; **everything else stays the same.**
+
+```{r}
+library(parsnip)
+library(workflows)
+
+spec <- tsfm_reg() |>
+  set_engine("tsfm",
+             model_id = "amazon/chronos-2",
+             index    = "date",
+             id       = "store")
+
+wf <- workflow() |>
+  add_formula(demand ~ date) |>
+  add_model(spec)
+
+fit <- fit(wf, data = train_df)
+predict(fit, new_data = future_df)   # tibble: .pred, .pred_lower, .pred_upper, ...
+```
+
+### Swapping models is a one-line change
+
+To forecast with TTM instead of Chronos-2, edit only `model_id` — the R analogue
+of Darts' "change only the model name":
+
+```{r}
+spec_ttm <- tsfm_reg() |>
+  set_engine("tsfm",
+             model_id = "ibm-granite/granite-timeseries-ttm-r2",  # <- only change
+             index    = "date",
+             id       = "store")
+```
+
+## Tuning the context length
+
+`context_length` is a tunable `dials` parameter, so a rolling-origin search over
+`rsample` resamples works out of the box:
+
+```{r}
+library(tune)
+library(rsample)
+
+spec <- tsfm_reg(context_length = tune()) |>
+  set_engine("tsfm", model_id = "amazon/chronos-2", index = "date", id = "store")
+
+tune_grid(
+  workflow() |> add_formula(demand ~ date) |> add_model(spec),
+  resamples = sliding_period(train_df, date, "month"),
+  grid      = 5
+)
+```
+
+## Status
+
+`amazon/chronos-2` is served today through a `brulee`-backed adapter. The native
+TTM and TimesFM implementations follow on the roadmap; because the loader,
+capability, batching, forecast, and parsnip layers shown here are model-agnostic,
+those arrive as new architectures behind the *same* code above.

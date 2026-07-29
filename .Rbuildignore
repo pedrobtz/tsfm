@@ -1,0 +1,11 @@
+^tsfm\.Rproj$
+^\.Rproj\.user$
+^\.github$
+^plan\.md$
+^roadmap\.md$
+^LICENSE\.md$
+^\.claude$
+^cran-comments\.md$
+^CRAN-SUBMISSION$
+^\.venv$
+^scratch$
