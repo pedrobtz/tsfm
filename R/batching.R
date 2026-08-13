@@ -14,7 +14,7 @@ tsfm_default_batch_size <- function() {
 # Validate a device string. Accepts "auto", "cpu", "mps", "cuda", and indexed
 # CUDA devices like "cuda:1".
 is_valid_device <- function(device) {
-  length(device) == 1L && is.character(device) &&
+  length(device) == 1L && is.character(device) && !is.na(device) &&
     grepl("^(auto|cpu|mps|cuda(:[0-9]+)?)$", device)
 }
 
@@ -33,10 +33,10 @@ is_valid_device <- function(device) {
 tsfm_resolve_device <- function(device = NULL) {
   device <- device %||% getOption("tsfm.device", "auto")
   if (!is_valid_device(device)) {
-    cli::cli_abort(c(
+    tsfm_abort_device(c(
       "Invalid {.arg device}: {.val {device}}.",
       "i" = "Use one of {.val auto}, {.val cpu}, {.val mps}, {.val cuda}, or {.val cuda:N}."
-    ))
+    ), requested_device = device)
   }
   if (!identical(device, "auto")) {
     return(validate_available_device(device))
@@ -86,7 +86,10 @@ validate_available_device <- function(device) {
 #' @export
 tsfm_set_device <- function(device) {
   if (!is_valid_device(device)) {
-    cli::cli_abort("Invalid {.arg device}: {.val {device}}.")
+    tsfm_abort_device(
+      "Invalid {.arg device}: {.val {device}}.",
+      requested_device = device
+    )
   }
   old <- getOption("tsfm.device", "auto")
   options(tsfm.device = device)
@@ -103,6 +106,106 @@ tsfm_to_device <- function(x, device) {
   x$to(device = torch::torch_device(device))
 }
 
+validate_batch_contexts <- function(contexts, model, call = rlang::caller_env()) {
+  if (!is.list(contexts)) {
+    tsfm_abort_capability(
+      "{.arg contexts} must be a list of numeric history vectors.",
+      model_id = model$model_id,
+      revision = model$revision,
+      capability = "context",
+      requested = class(contexts),
+      supported = "list of finite numeric vectors",
+      call = call
+    )
+  }
+  lapply(seq_along(contexts), function(i) {
+    ctx <- contexts[[i]]
+    if (!is.numeric(ctx) || !is.null(dim(ctx))) {
+      tsfm_abort_capability(
+        "Context {i} must be a numeric vector.",
+        model_id = model$model_id,
+        revision = model$revision,
+        capability = "context",
+        requested = class(ctx),
+        supported = "finite numeric vector",
+        call = call
+      )
+    }
+    ctx <- as.numeric(ctx)
+    if (any(is.infinite(ctx))) {
+      tsfm_abort_capability(
+        "Context {i} contains an infinite value.",
+        model_id = model$model_id,
+        revision = model$revision,
+        capability = "context",
+        requested = ctx,
+        supported = "finite observations; NA values are omitted",
+        call = call
+      )
+    }
+    ctx <- ctx[!is.na(ctx)]
+    if (!length(ctx)) {
+      tsfm_abort_capability(
+        "Context {i} has no observed values.",
+        model_id = model$model_id,
+        revision = model$revision,
+        capability = "context",
+        requested = ctx,
+        supported = "at least one finite observation",
+        call = call
+      )
+    }
+    if (length(ctx) > model$capabilities$max_context) {
+      ctx <- utils::tail(ctx, model$capabilities$max_context)
+    }
+    ctx
+  })
+}
+
+validate_quantile_matrix <- function(x, h, quantile_levels, model,
+                                     call = rlang::caller_env()) {
+  expected <- c(as.integer(h), length(quantile_levels))
+  if (!is.matrix(x) || !is.numeric(x) || !identical(dim(x), expected)) {
+    actual <- if (is.matrix(x)) dim(x) else class(x)
+    tsfm_abort_contract(
+      c(
+        "An architecture returned an invalid forecast matrix.",
+        "x" = "Expected a numeric matrix with dimensions {.val {expected}}.",
+        "i" = "Received {.val {actual}}."
+      ),
+      architecture = model$architecture,
+      model_id = model$model_id,
+      contract = "predict return shape",
+      expected = expected,
+      actual = actual,
+      call = call
+    )
+  }
+  if (any(!is.finite(x))) {
+    tsfm_abort_contract(
+      "An architecture returned non-finite forecast values.",
+      architecture = model$architecture,
+      model_id = model$model_id,
+      contract = "finite forecasts",
+      expected = "all finite values",
+      actual = sum(!is.finite(x)),
+      call = call
+    )
+  }
+  if (ncol(x) > 1L && any(apply(x, 1L, function(row) any(diff(row) < 0)))) {
+    tsfm_abort_contract(
+      "An architecture returned crossing predictive quantiles.",
+      architecture = model$architecture,
+      model_id = model$model_id,
+      contract = "monotone quantiles",
+      expected = "non-decreasing values across quantile levels",
+      actual = x,
+      call = call
+    )
+  }
+  x
+}
+
 #' Run a model over many series in batches
 #'
 #' Truncates each context to the model's `max_context`, then evaluates the
@@ -113,25 +216,57 @@ tsfm_to_device <- function(x, device) {
 #' @param contexts A list of numeric context vectors (oldest first).
 #' @param horizons A list/vector of per-series integer horizons.
 #' @param quantile_levels Numeric vector of quantile levels.
-#' @param batch_size Series per batch for vectorised models; default from
-#'   [tsfm_default_batch_size()].
+#' @param batch_size Series per batch for vectorised models; defaults to
+#'   `getOption("tsfm.batch_size", 64L)`.
 #' @param device Device string; resolved via [tsfm_resolve_device()].
 #' @return A list of quantile matrices.
 #' @export
 tsfm_run_batches <- function(model, contexts, horizons, quantile_levels,
                              batch_size = NULL, device = NULL) {
+  if (!inherits(model, "tsfm_model")) {
+    tsfm_abort_contract(
+      "{.arg model} must be a {.cls tsfm_model}.",
+      contract = "engine input",
+      expected = "tsfm_model",
+      actual = class(model)
+    )
+  }
   caps <- model$capabilities
-  contexts <- lapply(contexts, function(ctx) {
-    ctx <- as.numeric(ctx)
-    ctx <- ctx[!is.na(ctx)]
-    if (length(ctx) > caps$max_context) utils::tail(ctx, caps$max_context) else ctx
-  })
-  horizons <- as.integer(unlist(horizons, use.names = FALSE))
+  contexts <- validate_batch_contexts(contexts, model)
+  raw_horizons <- unlist(horizons, use.names = FALSE)
   n <- length(contexts)
   if (n == 0L) {
     return(list())
   }
-  batch_size <- as.integer(batch_size %||% tsfm_default_batch_size())
+  if (length(raw_horizons) != n) {
+    tsfm_abort_capability(
+      "{.arg horizons} must contain one value per context.",
+      model_id = model$model_id,
+      revision = model$revision,
+      capability = "horizon",
+      requested = length(raw_horizons),
+      supported = n
+    )
+  }
+  check_horizon(caps, raw_horizons, model$model_id, model$revision)
+  horizons <- as.integer(raw_horizons)
+  quantile_levels <- check_quantile_levels(
+    caps, quantile_levels, model$model_id, model$revision
+  )
+  batch_size <- batch_size %||% tsfm_default_batch_size()
+  if (length(batch_size) != 1L || !is.numeric(batch_size) || is.na(batch_size) ||
+      !is.finite(batch_size) || batch_size <= 0 || batch_size != floor(batch_size) ||
+      batch_size > .Machine$integer.max) {
+    tsfm_abort_capability(
+      "{.arg batch_size} must be one positive integer.",
+      model_id = model$model_id,
+      revision = model$revision,
+      capability = "batch_size",
+      requested = batch_size,
+      supported = "one positive integer"
+    )
+  }
+  batch_size <- as.integer(batch_size)
   device <- tsfm_resolve_device(device)
 
   if (is.function(model$predict_batch_fn)) {
@@ -140,18 +275,30 @@ tsfm_run_batches <- function(model, contexts, horizons, quantile_levels,
     for (g in groups) {
       res <- model$predict_batch_fn(contexts[g], horizons[g], quantile_levels,
                                     device = device)
-      if (length(res) != length(g)) {
-        cli::cli_abort(
-          "The model's batch function returned {length(res)} results for a \\
-           batch of {length(g)} series."
+      if (!is.list(res) || length(res) != length(g)) {
+        tsfm_abort_contract(
+          "The model's batch function returned an invalid result collection.",
+          architecture = model$architecture,
+          model_id = model$model_id,
+          contract = "predict_batch return length",
+          expected = length(g),
+          actual = if (is.list(res)) length(res) else class(res)
         )
       }
+      res <- lapply(seq_along(g), function(i) {
+        validate_quantile_matrix(
+          res[[i]], horizons[[g[[i]]]], quantile_levels, model
+        )
+      })
       out[g] <- res
     }
     out
   } else {
     lapply(seq_len(n), function(i) {
-      model$predict_fn(contexts[[i]], horizons[[i]], quantile_levels)
+      validate_quantile_matrix(
+        model$predict_fn(contexts[[i]], horizons[[i]], quantile_levels),
+        horizons[[i]], quantile_levels, model
+      )
     })
   }
 }

@@ -1,4 +1,4 @@
-# TimesFM 2.5 --- native architecture, Stage 2.
+# TimesFM 2.5 --- 0.1.0 release-model scaffold.
 #
 # STATUS: scaffold, mirroring the TTM approach (see arch-ttm.R). Capabilities,
 # config parsing, registry dispatch, and the weight-map contract are wired; the
@@ -8,7 +8,7 @@
 # `timesfm` Python package). Until then the forward pass errors with a clear
 # pointer rather than returning unverified numbers.
 #
-# Why TimesFM is Stage 2 (see roadmap): highest-demand missing model; a
+# Why TimesFM is the release model (see roadmap): highest-demand missing model; a
 # decoder-only patching transformer, so it is the first architecture to exercise
 # real attention blocks, quantile heads, and long contexts in R torch.
 #
@@ -38,13 +38,17 @@ timesfm_capabilities <- function(config) {
     max_context       = as.integer(
       config$context_length %||% config$context_len %||% config$max_context %||% 2048L
     ),
+    max_horizon       = as.integer(
+      config$quantile_horizon_length %||% config$quantile_horizon_len %||% 1024L
+    ),
     quantiles         = "native",
-    multivariate      = FALSE,   # univariate targets; covariates via regression
+    quantile_levels   = as.numeric(config$quantiles %||% seq(0.1, 0.9, by = 0.1)),
+    multivariate      = FALSE,
     samples           = FALSE,
-    past_covariates   = TRUE,
-    future_covariates = TRUE,
+    past_covariates   = FALSE,
+    future_covariates = FALSE,
     static_covariates = FALSE,
-    fine_tunable      = TRUE,
+    fine_tunable      = FALSE,
     license           = "Apache-2.0"
   )
 }
@@ -52,31 +56,45 @@ timesfm_capabilities <- function(config) {
 # Translate checkpoint tensor names -> module parameter paths. Filled during the
 # numerical port; isolated so the mapping lives in exactly one place.
 timesfm_weight_map <- function(config) {
-  cli::cli_abort(c(
+  tsfm_abort_checkpoint(c(
     "The TimesFM weight map is not implemented yet.",
     "i" = "It is derived from the checkpoint's {.file config.json} at port time."
-  ))
+  ),
+  model_id = config$model_id %||% "google/timesfm-2.5-200m-pytorch",
+  revision = config$revision %||% NA_character_,
+  expected = "complete state-dict mapping",
+  actual = "scaffold")
 }
 
 # Build the R torch nn_module for TimesFM. Deferred to the numerical port; the
 # causal attention block is the main new operator surface versus TTM.
 timesfm_module <- function(config) {
-  rlang::check_installed("torch", reason = "to build the TimesFM network.")
-  cli::cli_abort("The native TimesFM nn_module is not implemented yet (Stage 2, in progress).")
+  tsfm_require_namespace("torch", reason = "It is needed to build the TimesFM network.")
+  tsfm_abort_checkpoint(
+    "The native TimesFM nn_module is not implemented yet.",
+    model_id = config$model_id %||% "google/timesfm-2.5-200m-pytorch",
+    revision = config$revision %||% NA_character_,
+    expected = "checkpoint-compatible nn_module",
+    actual = "scaffold"
+  )
 }
 
 timesfm_constructor <- function(config, weights = NULL) {
   caps <- timesfm_capabilities(config)
 
   not_ready <- function(...) {
-    cli::cli_abort(c(
-      "The native TimesFM forward pass is not implemented yet (Stage 2, in progress).",
+    tsfm_abort_capability(c(
+      "The native TimesFM forward pass is not implemented yet.",
       "i" = "Numerical parity against {.val google/timesfm-2.5-200m-pytorch} \\
              requires golden fixtures generated with the Hub checkpoint, torch, \\
              and reference {.pkg timesfm}.",
-      "i" = "In the meantime use {.code tsfm_pretrained(\"stub\")} or the \\
-             Chronos-2 adapter via {.code tsfm_pretrained(\"amazon/chronos-2\")}."
-    ))
+      "i" = "Use {.code tsfm_pretrained(\"stub\")} to exercise the engine shell."
+    ),
+    model_id = config$model_id %||% "google/timesfm-2.5-200m-pytorch",
+    revision = config$revision %||% NA_character_,
+    capability = "model_state",
+    requested = "scaffold",
+    supported = "supported")
   }
 
   new_tsfm_model(

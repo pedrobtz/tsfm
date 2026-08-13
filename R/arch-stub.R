@@ -15,7 +15,13 @@ stub_predict_batch <- function(context, h, quantile_levels) {
   h <- as.integer(h)
 
   if (length(context) == 0L) {
-    cli::cli_abort("The stub model requires at least one observed value of context.")
+    tsfm_abort_capability(
+      "The stub model requires at least one observed value of context.",
+      model_id = "stub",
+      capability = "context",
+      requested = 0L,
+      supported = "at least one observation"
+    )
   }
 
   last <- context[length(context)]
@@ -41,6 +47,7 @@ stub_constructor <- function(config, weights = NULL) {
     architecture = "stub",
     max_context  = max_context,
     quantiles    = "native",
+    quantile_levels = NULL,
     multivariate = FALSE,
     samples      = FALSE,
     fine_tunable = FALSE,

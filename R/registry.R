@@ -18,14 +18,31 @@
 #' @export
 tsfm_register_arch <- function(architecture, constructor, overwrite = FALSE) {
   architecture <- as.character(architecture)
+  if (length(architecture) != 1L || is.na(architecture) || !nzchar(architecture)) {
+    tsfm_abort_capability(
+      "{.arg architecture} must be one non-empty registry key.",
+      capability = "architecture_registration",
+      requested = architecture,
+      supported = "one non-empty string"
+    )
+  }
   if (!is.function(constructor)) {
-    cli::cli_abort("{.arg constructor} must be a function of {.code (config, weights)}.")
+    tsfm_abort_contract(
+      "{.arg constructor} must be a function of {.code (config, weights)}.",
+      architecture = architecture,
+      contract = "architecture registration",
+      expected = "function(config, weights)",
+      actual = class(constructor)
+    )
   }
   if (!isTRUE(overwrite) && tsfm_registry_has(architecture)) {
-    cli::cli_abort(c(
+    tsfm_abort_capability(c(
       "Architecture {.val {architecture}} is already registered.",
       "i" = "Pass {.code overwrite = TRUE} to replace it."
-    ))
+    ),
+    capability = "architecture_registration",
+    requested = architecture,
+    supported = "an unregistered key or overwrite = TRUE")
   }
   assign(architecture, constructor, envir = .tsfm_registry)
   invisible(architecture)
@@ -34,7 +51,11 @@ tsfm_register_arch <- function(architecture, constructor, overwrite = FALSE) {
 #' @rdname tsfm_register_arch
 #' @export
 tsfm_registry_has <- function(architecture) {
-  exists(as.character(architecture), envir = .tsfm_registry, inherits = FALSE)
+  architecture <- as.character(architecture)
+  if (length(architecture) != 1L || is.na(architecture) || !nzchar(architecture)) {
+    return(FALSE)
+  }
+  exists(architecture, envir = .tsfm_registry, inherits = FALSE)
 }
 
 #' @rdname tsfm_register_arch
@@ -48,7 +69,7 @@ tsfm_registry_get <- function(architecture, call = rlang::caller_env()) {
   architecture <- as.character(architecture)
   if (!tsfm_registry_has(architecture)) {
     available <- tsfm_registry_archs()
-    cli::cli_abort(
+    tsfm_abort_capability(
       c(
         "No constructor registered for architecture {.val {architecture}}.",
         "i" = if (length(available)) {
@@ -57,6 +78,9 @@ tsfm_registry_get <- function(architecture, call = rlang::caller_env()) {
           "No architectures are registered."
         }
       ),
+      capability = "architecture",
+      requested = architecture,
+      supported = available,
       call = call
     )
   }

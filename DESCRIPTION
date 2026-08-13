@@ -3,20 +3,20 @@ Title: Native Time-Series Foundation Models for R
 Version: 0.0.0.9000
 Authors@R:
     person("Pedro", "Botz", , "pedrobtz@gmail.com", role = c("aut", "cre"))
-Description: Zero-shot (and later fine-tuned) forecasting with open
-    time-series foundation models, natively in R. Provides a
-    'from_pretrained()'-style loader with an architecture registry, native
-    'torch' implementations of a curated model catalogue, a shared
-    preprocessing contract, explicit capability metadata, batched panel
-    inference, and a standard forecast object. Designed tidymodels-first:
-    'hardhat'-based formula, data frame, and recipe interfaces, a 'parsnip'
-    model specification so models drop into 'workflows', 'tune', and
-    'rsample' unchanged, and 'yardstick'-compatible output, with thin
-    secondary adapters into the tidyverts and 'modeltime' ecosystems.
+Description: An inference engine under development for running open
+    time-series foundation models natively in R. It provides a
+    'from_pretrained()'-style loader with an open architecture registry, a
+    versioned execution contract and conformance harness, explicit capability
+    metadata, batched panel inference with device resolution, and a standard
+    forecast object backed by 'distributional'. The current executable model
+    is a weight-free test fixture; native model support requires numerical
+    parity against a pinned reference implementation. The engine is
+    framework-neutral, with optional adapters for 'tidymodels' (via 'hardhat'
+    and 'parsnip') and the tidyverts (via 'fabletools').
 License: MIT + file LICENSE
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
-RoxygenNote: 7.3.2
+RoxygenNote: 7.3.3
 URL: https://github.com/pedrobtz/tsfm
 BugReports: https://github.com/pedrobtz/tsfm/issues
 Depends:
@@ -24,23 +24,20 @@ Depends:
 Imports:
     cli,
     distributional,
-    hardhat,
+    generics,
     hfhub,
+    jsonlite,
     rlang,
     safetensors,
-    torch
+    torch,
+    vctrs
 Suggests:
     brulee,
-    conformalForecast,
     dials,
-    fable,
     fabletools,
-    ggplot2,
-    jsonlite,
+    hardhat,
     knitr,
-    modeltime,
     parsnip,
-    recipes,
     rmarkdown,
     rsample,
     testthat (>= 3.0.0),

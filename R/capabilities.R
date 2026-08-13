@@ -8,21 +8,25 @@
 #'
 #' @param architecture Character scalar, the architecture key (e.g. `"ttm"`).
 #' @param max_context Integer, the maximum supported context length.
+#' @param max_horizon Numeric scalar, the maximum supported forecast horizon,
+#'   or `Inf` when the architecture has no smaller declared limit.
 #' @param quantiles One of `"native"` (the model emits quantiles directly) or
 #'   `"none"`.
-#' @param multivariate Logical, whether multiple target series can be modelled
-#'   jointly.
-#' @param samples Logical, whether the model can emit sample paths.
-#' @param past_covariates,future_covariates,static_covariates Logical, which
-#'   covariate roles the model consumes.
-#' @param fine_tunable Logical, whether the weights can be fine-tuned.
+#' @param quantile_levels Numeric vector of quantile levels the checkpoint can
+#'   emit, or `NULL` when a native-quantile architecture accepts arbitrary
+#'   levels.
+#' @param multivariate,samples,past_covariates,future_covariates,static_covariates,fine_tunable Reserved logical fields. They must remain `FALSE` in contract
+#'   v1 because the forward signature has no channel for those inputs or
+#'   outputs.
 #' @param license Character scalar, the SPDX identifier of the *weight* licence.
 #'
 #' @return A `tsfm_capabilities` object.
 #' @export
 new_tsfm_capabilities <- function(architecture,
                                   max_context,
+                                  max_horizon = Inf,
                                   quantiles = c("native", "none"),
+                                  quantile_levels = NULL,
                                   multivariate = FALSE,
                                   samples = FALSE,
                                   past_covariates = FALSE,
@@ -30,18 +34,97 @@ new_tsfm_capabilities <- function(architecture,
                                   static_covariates = FALSE,
                                   fine_tunable = FALSE,
                                   license = NA_character_) {
+  architecture <- as.character(architecture)
+  max_context <- as.integer(max_context)
+  max_horizon <- as.numeric(max_horizon)
   quantiles <- match.arg(quantiles)
+  if (length(architecture) != 1L || is.na(architecture) || !nzchar(architecture)) {
+    tsfm_abort_contract(
+      "{.arg architecture} must be one non-empty string.",
+      contract = "capability declaration",
+      expected = "one non-empty architecture key",
+      actual = architecture
+    )
+  }
+  if (length(max_context) != 1L || is.na(max_context) || max_context <= 0L) {
+    tsfm_abort_contract(
+      "{.arg max_context} must be one positive integer.",
+      architecture = architecture,
+      contract = "capability declaration",
+      expected = "one positive integer",
+      actual = max_context
+    )
+  }
+  if (length(max_horizon) != 1L || is.na(max_horizon) || max_horizon <= 0) {
+    tsfm_abort_contract(
+      "{.arg max_horizon} must be positive or {.val Inf}.",
+      architecture = architecture,
+      contract = "capability declaration",
+      expected = "one positive number or Inf",
+      actual = max_horizon
+    )
+  }
+
+  if (is.null(quantile_levels)) {
+    quantile_levels <- if (identical(quantiles, "none")) numeric() else NULL
+  } else {
+    quantile_levels <- sort(unique(as.numeric(quantile_levels)))
+    if (anyNA(quantile_levels) || any(!is.finite(quantile_levels)) ||
+        any(quantile_levels <= 0 | quantile_levels >= 1)) {
+      tsfm_abort_contract(
+        "{.arg quantile_levels} must contain unique finite values strictly between 0 and 1.",
+        architecture = architecture,
+        contract = "capability declaration",
+        expected = "finite probabilities in (0, 1)",
+        actual = quantile_levels
+      )
+    }
+  }
+  if (identical(quantiles, "none") && length(quantile_levels)) {
+    tsfm_abort_contract(
+      "A point-only model cannot declare supported quantile levels.",
+      architecture = architecture,
+      contract = "capability declaration",
+      expected = numeric(),
+      actual = quantile_levels
+    )
+  }
+
+  reserved <- c(
+    multivariate = multivariate,
+    samples = samples,
+    past_covariates = past_covariates,
+    future_covariates = future_covariates,
+    static_covariates = static_covariates,
+    fine_tunable = fine_tunable
+  )
+  if (any(vapply(reserved, isTRUE, logical(1)))) {
+    enabled <- names(reserved)[vapply(reserved, isTRUE, logical(1))]
+    tsfm_abort_contract(
+      c(
+        "Contract v1 has no execution channel for the declared capability.",
+        "x" = "Disable: {.val {enabled}}."
+      ),
+      architecture = architecture,
+      contract = "capability declaration",
+      expected = FALSE,
+      actual = enabled
+    )
+  }
+
   structure(
     list(
-      architecture      = as.character(architecture),
-      max_context       = as.integer(max_context),
+      architecture      = architecture,
+      max_context       = max_context,
+      max_horizon       = max_horizon,
       quantiles         = quantiles,
-      multivariate      = isTRUE(multivariate),
-      samples           = isTRUE(samples),
-      past_covariates   = isTRUE(past_covariates),
-      future_covariates = isTRUE(future_covariates),
-      static_covariates = isTRUE(static_covariates),
-      fine_tunable      = isTRUE(fine_tunable),
+      quantile_levels   = quantile_levels,
+      multivariate      = FALSE,
+      samples           = FALSE,
+      past_covariates   = FALSE,
+      future_covariates = FALSE,
+      static_covariates = FALSE,
+      fine_tunable      = FALSE,
       license           = as.character(license)
     ),
     class = "tsfm_capabilities"
@@ -66,10 +149,18 @@ tsfm_capabilities.tsfm_capabilities <- function(x, ...) {
 #' @export
 format.tsfm_capabilities <- function(x, ...) {
   yn <- function(v) if (isTRUE(v)) "TRUE" else "FALSE"
+  levels <- if (is.null(x$quantile_levels)) {
+    "arbitrary"
+  } else if (!length(x$quantile_levels)) {
+    "none"
+  } else {
+    paste(x$quantile_levels, collapse = ", ")
+  }
   c(
     "<tsfm_capabilities>",
     sprintf("  architecture:      %s", x$architecture),
-    sprintf("  max_context:       %s        quantiles: %s", x$max_context, x$quantiles),
+    sprintf("  max_context:       %s        max_horizon: %s", x$max_context, x$max_horizon),
+    sprintf("  quantiles:         %s        levels: %s", x$quantiles, levels),
     sprintf("  multivariate:      %s        samples:   %s", yn(x$multivariate), yn(x$samples)),
     sprintf("  past_covariates:   %s        future_covariates: %s",
             yn(x$past_covariates), yn(x$future_covariates)),
@@ -90,18 +181,122 @@ print.tsfm_capabilities <- function(x, ...) {
 
 # Assert a requested context length fits the model. `call` is the calling
 # environment for cli's error attribution.
-check_context_length <- function(caps, context_length, call = rlang::caller_env()) {
+check_context_length <- function(caps, context_length,
+                                 model_id = NA_character_,
+                                 revision = NA_character_,
+                                 call = rlang::caller_env()) {
   if (!is.null(context_length) && context_length > caps$max_context) {
-    cli::cli_abort(
+    tsfm_abort_context_length(
       c(
         "Requested context length exceeds the model's capability.",
         "x" = "Requested {.val {context_length}} observations of context.",
         "i" = "Architecture {.val {caps$architecture}} supports at most {.val {caps$max_context}}."
       ),
+      model_id = model_id,
+      revision = revision,
+      requested = context_length,
+      supported = caps$max_context,
       call = call
     )
   }
   invisible(caps)
+}
+
+check_horizon <- function(caps, h,
+                          model_id = NA_character_,
+                          revision = NA_character_,
+                          call = rlang::caller_env()) {
+  valid <- is.numeric(h) && length(h) > 0L && !anyNA(h) && all(is.finite(h)) &&
+    all(h > 0) && all(h == floor(h)) && all(h <= .Machine$integer.max)
+  if (!valid) {
+    tsfm_abort_capability(
+      "Forecast horizons must be positive integers.",
+      model_id = model_id,
+      revision = revision,
+      capability = "horizon",
+      requested = h,
+      supported = sprintf("positive integers up to %s", caps$max_horizon),
+      call = call
+    )
+  }
+  if (any(h > caps$max_horizon)) {
+    tsfm_abort_capability(
+      c(
+        "Requested horizon exceeds the model's capability.",
+        "x" = "Requested a maximum horizon of {.val {max(h)}}.",
+        "i" = "This checkpoint supports at most {.val {caps$max_horizon}}."
+      ),
+      model_id = model_id,
+      revision = revision,
+      capability = "horizon",
+      requested = h,
+      supported = caps$max_horizon,
+      call = call
+    )
+  }
+  invisible(caps)
+}
+
+check_quantile_levels <- function(caps, quantile_levels,
+                                  model_id = NA_character_,
+                                  revision = NA_character_,
+                                  call = rlang::caller_env()) {
+  if (!is.numeric(quantile_levels)) {
+    tsfm_abort_quantile_levels(
+      "Quantile levels must be supplied as a numeric vector.",
+      model_id = model_id,
+      revision = revision,
+      requested = quantile_levels,
+      supported = caps$quantile_levels,
+      call = call
+    )
+  }
+  levels <- as.numeric(quantile_levels)
+  valid <- length(levels) > 0L && !anyNA(levels) && all(is.finite(levels)) &&
+    all(levels > 0 & levels < 1)
+  if (!valid || anyDuplicated(levels)) {
+    tsfm_abort_quantile_levels(
+      "Quantile levels must be unique finite probabilities strictly between 0 and 1.",
+      model_id = model_id,
+      revision = revision,
+      requested = quantile_levels,
+      supported = caps$quantile_levels,
+      call = call
+    )
+  }
+  if (identical(caps$quantiles, "none")) {
+    tsfm_abort_quantile_levels(
+      "This model does not emit predictive quantiles.",
+      model_id = model_id,
+      revision = revision,
+      requested = levels,
+      supported = numeric(),
+      call = call
+    )
+  }
+  supported <- caps$quantile_levels
+  if (!is.null(supported)) {
+    present <- vapply(
+      levels,
+      function(level) any(abs(supported - level) <= sqrt(.Machine$double.eps)),
+      logical(1)
+    )
+    if (!all(present)) {
+      tsfm_abort_quantile_levels(
+        c(
+          "The checkpoint does not emit every requested quantile level.",
+          "x" = "Unsupported: {.val {levels[!present]}}.",
+          "i" = "Supported levels: {.val {supported}}."
+        ),
+        model_id = model_id,
+        revision = revision,
+        requested = levels,
+        supported = supported,
+        call = call
+      )
+    }
+  }
+  invisible(sort(levels))
 }
 
 # Assert the request only asks for capabilities the model declares.
@@ -123,11 +318,19 @@ check_capabilities <- function(caps,
   flag(static_covariates, caps$static_covariates, "Static covariates")
 
   if (length(problems)) {
-    cli::cli_abort(
+    tsfm_abort_capability(
       c(
         "The request exceeds architecture {.val {caps$architecture}}'s capabilities.",
         stats::setNames(problems, rep("x", length(problems)))
       ),
+      capability = "input_channels",
+      requested = c(
+        multivariate = isTRUE(multivariate),
+        past_covariates = isTRUE(past_covariates),
+        future_covariates = isTRUE(future_covariates),
+        static_covariates = isTRUE(static_covariates)
+      ),
+      supported = FALSE,
       call = call
     )
   }

@@ -9,32 +9,56 @@ test_that("tsfm_reg registers with parsnip and builds a spec", {
   expect_identical(spec$mode, "regression")
 })
 
-test_that("models are exchangeable by model_id via set_engine only", {
+test_that("model identity is supplied through set_engine", {
   skip_if_not_installed("parsnip")
   make_tsfm_reg()
 
-  # The Stage 1 exit criterion: the *only* thing that differs between two
-  # foundation models in a spec is the engine's model_id argument.
-  spec_ttm <- parsnip::set_engine(
+  spec_stub <- parsnip::set_engine(
     tsfm_reg(), "tsfm",
-    model_id = "ibm-granite/granite-timeseries-ttm-r2", index = "date", id = "store"
+    model_id = "stub", index = "date", id = "store"
   )
-  spec_chronos <- parsnip::set_engine(
+  spec_other <- parsnip::set_engine(
     tsfm_reg(), "tsfm",
-    model_id = "amazon/chronos-2", index = "date", id = "store"
+    model_id = "stub-alternate", index = "date", id = "store"
   )
 
-  expect_identical(spec_ttm$engine, "tsfm")
+  expect_identical(spec_stub$engine, "tsfm")
   expect_identical(
-    rlang::eval_tidy(spec_ttm$eng_args$model_id),
-    "ibm-granite/granite-timeseries-ttm-r2"
+    rlang::eval_tidy(spec_stub$eng_args$model_id),
+    "stub"
   )
   expect_identical(
-    rlang::eval_tidy(spec_chronos$eng_args$model_id),
-    "amazon/chronos-2"
+    rlang::eval_tidy(spec_other$eng_args$model_id),
+    "stub-alternate"
   )
-  # Everything else about the two specs is identical.
-  expect_identical(names(spec_ttm$eng_args), names(spec_chronos$eng_args))
+  expect_identical(names(spec_stub$eng_args), names(spec_other$eng_args))
+})
+
+test_that("parsnip fits and predicts through the exported stub bridge", {
+  skip_if_not_installed("parsnip")
+  skip_if_not_installed("hardhat")
+  skip_if_not_installed("distributional")
+  make_tsfm_reg()
+
+  expect_true("tsfm_parsnip_fit" %in% getNamespaceExports("tsfm"))
+
+  train <- data.frame(store = "a", date = 1:20, value = as.numeric(1:20))
+  future <- data.frame(store = "a", date = 21:23)
+  spec <- parsnip::set_engine(
+    tsfm_reg(context_length = 8L),
+    "tsfm",
+    model_id = "stub",
+    index = "date",
+    id = "store"
+  )
+
+  fit <- parsnip::fit(spec, value ~ 1, data = train)
+  expect_s3_class(fit$fit, "tsfm_fit")
+  expect_identical(fit$fit$model$capabilities$max_context, 8L)
+
+  pred <- predict(fit, new_data = future)
+  expect_identical(names(pred), ".pred")
+  expect_equal(pred$.pred, rep(20, 3))
 })
 
 test_that("context_length is exposed as a tunable dials parameter", {

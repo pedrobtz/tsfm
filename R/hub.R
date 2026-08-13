@@ -3,27 +3,125 @@
 #' Resolves a model's configuration, looks up the matching architecture
 #' constructor in the registry, and returns a uniform [new_tsfm_model()] handle.
 #'
-#' In Stage 0 only the built-in `"stub"` model is fully wired: passing
+#' The built-in `"stub"` model is fully wired: passing
 #' `"stub"` (or any id beginning with `"stub"`) synthesises a config in memory
-#' and skips the download entirely, so the loader/registry/forecast contract can
-#' be exercised without network access or torch. For real checkpoints the
-#' function downloads `config.json` through \pkg{hfhub} (with the revision
-#' pinned), reads the architecture key, and dispatches to the registry; the
-#' native architectures that consume the downloaded weights arrive from Stage 1.
+#' and skips download and torch. For a supported real checkpoint the function
+#' resolves its immutable catalogue revision, downloads the required manifest,
+#' validates and loads the safetensors state dict, dispatches to the registered
+#' constructor, and optionally retains the constructed handle in a bounded
+#' R-session LRU. Scaffold and experimental checkpoints fail before download;
+#' use [tsfm_download()] only when explicitly prefetching their files.
 #'
 #' @param model_id Character scalar. A Hub repo id such as
 #'   `"ibm-granite/granite-timeseries-ttm-r2"`, or `"stub"` for the built-in
 #'   Stage 0 model.
 #' @param revision Character scalar. A branch, tag, or commit SHA to pin.
-#'   Defaults to `"main"`; pinning to a SHA is recommended for reproducibility.
-#' @param ... Passed to the architecture constructor.
+#'   `NULL` uses the immutable revision in the catalogue for curated models and
+#'   `"main"` for the built-in stub.
+#' @param device Device requested for model construction; resolved through
+#'   [tsfm_resolve_device()].
+#' @param reuse Logical; reuse an identical constructed handle from the bounded
+#'   R-session cache. `FALSE` constructs a fresh handle without deleting files.
+#' @param ... Load-affecting architecture options included in the resident
+#'   cache key and made available through `config$load_options`.
 #' @return A [new_tsfm_model()].
 #' @export
-tsfm_pretrained <- function(model_id, revision = "main", ...) {
-  model_id <- as.character(model_id)
-  resolved <- tsfm_resolve_config(model_id, revision, ...)
+tsfm_pretrained <- function(model_id, revision = NULL, device = NULL,
+                            reuse = TRUE, ...) {
+  if (length(model_id) != 1L || !is.character(model_id) ||
+      is.na(model_id) || !nzchar(model_id)) {
+    tsfm_abort_capability(
+      "{.arg model_id} must be one non-empty checkpoint identifier.",
+      capability = "model_id",
+      requested = model_id,
+      supported = "one non-empty string"
+    )
+  }
+  if (length(reuse) != 1L || !is.logical(reuse) || is.na(reuse)) {
+    tsfm_abort_capability(
+      "{.arg reuse} must be one non-missing logical value.",
+      model_id = model_id,
+      capability = "resident_cache",
+      requested = reuse,
+      supported = c(TRUE, FALSE)
+    )
+  }
+  if (is_chronos2_id(model_id)) {
+    tsfm_abort_chronos2(model_id, revision %||% "main")
+  }
+  record <- if (is_stub_id(model_id)) NULL else {
+    tsfm_resolve_catalogue_entry(model_id, revision)
+  }
+  if (!is.null(record) && !identical(record$state, "supported")) {
+    tsfm_abort_capability(
+      c(
+        "Checkpoint {.val {model_id}} is not supported for inference.",
+        "x" = "Its catalogue state is {.val {record$state}}.",
+        "i" = "Use {.fn tsfm_models} to discover checkpoints that passed the release gates."
+      ),
+      model_id = model_id,
+      revision = record$revision,
+      capability = "model_state",
+      requested = record$state,
+      supported = "supported"
+    )
+  }
+  if (!is.null(record) && !tsfm_registry_has(record$architecture)) {
+    tsfm_abort_capability(
+      "No constructor is registered for checkpoint architecture {.val {record$architecture}}.",
+      model_id = record$model_id,
+      revision = record$revision,
+      capability = "architecture",
+      requested = record$architecture,
+      supported = tsfm_registry_archs()
+    )
+  }
+  revision <- if (is.null(record)) revision %||% "main" else record$revision
+  if (length(revision) != 1L || !is.character(revision) ||
+      is.na(revision) || !nzchar(revision)) {
+    tsfm_abort_capability(
+      "{.arg revision} must be one non-empty revision string or {.code NULL}.",
+      model_id = model_id,
+      capability = "revision",
+      requested = revision,
+      supported = if (is.null(record)) "one revision string" else record$revision
+    )
+  }
+  resolved_device <- tsfm_resolve_device(device)
+  load_options <- list(...)
+  key <- tsfm_handle_key(model_id, revision, resolved_device, load_options)
+  maximum <- tsfm_max_loaded_models()
+  tsfm_handle_cache_trim(maximum)
+  if (isTRUE(reuse) && maximum > 0L) {
+    cached <- tsfm_handle_cache_get(key)
+    if (!is.null(cached)) return(cached)
+  }
+  paths <- if (is.null(record)) NULL else {
+    tsfm_download(model_id, revision, progress = FALSE)
+  }
+  resolved <- tsfm_resolve_config(
+    model_id,
+    revision,
+    paths = paths,
+    record = record,
+    device = resolved_device,
+    load_options = load_options
+  )
   constructor <- tsfm_registry_get(resolved$config$architecture)
-  constructor(resolved$config, resolved$weights)
+  model <- constructor(resolved$config, resolved$weights)
+  model$device <- resolved_device
+  if (isTRUE(reuse)) {
+    tsfm_handle_cache_put(
+      key,
+      model,
+      model_id,
+      revision,
+      resolved_device,
+      load_options,
+      size_bytes = record$size_bytes %||% 0
+    )
+  }
+  model
 }
 
 # Distinguish the built-in stub from a real Hub id.
@@ -31,54 +129,84 @@ is_stub_id <- function(model_id) {
   identical(model_id, "stub") || grepl("^stub([-/]|$)", model_id)
 }
 
-# Chronos-2 is served through the brulee-backed adapter (roadmap Stage 1), which
-# manages its own download, so it short-circuits the generic config fetch.
+# Recognise Chronos-2 ids so the unsupported reference adapter fails before any
+# network or tensor work. Native support is deferred until contract v2 can
+# represent its multivariate and covariate inputs.
 is_chronos2_id <- function(model_id) {
   grepl("chronos-?2", model_id, ignore.case = TRUE)
+}
+
+tsfm_abort_chronos2 <- function(model_id, revision,
+                                call = rlang::caller_env()) {
+  tsfm_abort_capability(c(
+    "Chronos-2 is not a supported model in tsfm 0.1.0.",
+    "i" = "The former Brulee adapter is retained as unregistered reference work only.",
+    "i" = "Native support is planned after the multivariate/covariate contract extension."
+  ),
+  model_id = model_id,
+  revision = revision,
+  capability = "architecture",
+  requested = "chronos2",
+  supported = tsfm_registry_archs(),
+  call = call)
 }
 
 # Return list(config = <parsed config, incl. `architecture`>, weights = <state
 # dict or NULL>). The stub branch is self-contained; the real branch is the
 # hfhub plumbing that Stage 1's native architectures build on.
-tsfm_resolve_config <- function(model_id, revision, ..., call = rlang::caller_env()) {
+tsfm_resolve_config <- function(model_id, revision, paths = NULL, record = NULL,
+                                device = "cpu", load_options = list(),
+                                call = rlang::caller_env()) {
   if (is_stub_id(model_id)) {
     config <- list(
       architecture = "stub",
       model_id     = model_id,
       revision     = revision,
-      max_context  = 512L
+      max_context  = 512L,
+      device       = device,
+      load_options = load_options
     )
     return(list(config = config, weights = NULL))
   }
 
   if (is_chronos2_id(model_id)) {
-    config <- list(
-      architecture = "chronos2",
-      model_id     = model_id,
-      revision     = revision
-    )
-    return(list(config = config, weights = NULL))
+    tsfm_abort_chronos2(model_id, revision, call)
   }
 
-  # Real checkpoints: download and parse config.json, normalise the architecture
-  # key, then (Stage 1+) hand off to a registered native constructor. Until a
-  # native architecture is registered, `tsfm_pretrained()` will stop at the
-  # registry lookup with a clear "not registered" error rather than downloading
-  # weights it cannot yet consume, so we defer the weight fetch to the
-  # constructor path in a later stage.
-  rlang::check_installed("hfhub", reason = "to download checkpoints from the Hugging Face Hub.")
-  config_path <- hfhub::hub_download(model_id, "config.json", revision = revision)
-  config <- jsonlite_read(config_path)
+  record <- record %||% tsfm_resolve_catalogue_entry(model_id, revision, call)
+  paths <- paths %||% tsfm_download(model_id, revision, progress = FALSE)
+  config_path <- paths[["config.json"]]
+  config <- tryCatch(
+    jsonlite_read(config_path),
+    error = function(e) {
+      tsfm_abort_checkpoint(
+        c(
+          "The checkpoint configuration is not valid JSON.",
+          "x" = conditionMessage(e)
+        ),
+        model_id = model_id,
+        revision = revision,
+        tensor = "config.json",
+        expected = "valid checkpoint configuration",
+        actual = conditionMessage(e),
+        call = call
+      )
+    }
+  )
   config$architecture <- normalize_architecture(config)
   config$model_id <- model_id
   config$revision <- revision
-  list(config = config, weights = NULL)
+  config$device <- device
+  config$load_options <- load_options
+  weight_path <- paths[["model.safetensors"]]
+  weights <- tsfm_load_state_dict(weight_path, record, config)
+  list(config = config, weights = weights, paths = paths)
 }
 
 # Read a JSON config without taking a hard dependency: hfhub pulls in jsonlite,
 # but resolve it at call time to keep this decoupled.
 jsonlite_read <- function(path) {
-  rlang::check_installed("jsonlite", reason = "to parse checkpoint configs.")
+  tsfm_require_namespace("jsonlite", reason = "It is needed to parse checkpoint configs.")
   jsonlite::fromJSON(path, simplifyVector = TRUE)
 }
 
@@ -89,7 +217,12 @@ jsonlite_read <- function(path) {
 normalize_architecture <- function(config) {
   arch <- config$architecture %||% config$model_type %||% config$architectures[1]
   if (is.null(arch) || is.na(arch)) {
-    cli::cli_abort("Could not determine the architecture from the checkpoint config.")
+    tsfm_abort_checkpoint(
+      "Could not determine the architecture from the checkpoint config.",
+      tensor = "config.json",
+      expected = "architecture, model_type, or architectures",
+      actual = names(config)
+    )
   }
   arch <- tolower(as.character(arch)[1])
   aliases <- c(

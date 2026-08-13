@@ -1,4 +1,4 @@
-# TinyTimeMixer (TTM) --- native architecture, Stage 1.
+# TinyTimeMixer (TTM) --- deferred scaffold.
 #
 # STATUS: scaffold. Capabilities, config parsing, registry dispatch, and the
 # weight-map contract are in place; the numerical forward pass and the
@@ -9,9 +9,9 @@
 # Python implementation to produce expected outputs). Until then the forward
 # pass errors with a clear pointer rather than returning unverified numbers.
 #
-# Why TTM is the first native model (see roadmap Stage 1): <1M params, a pure
-# MLP-mixer with no attention kernels (the lowest R-torch-operator risk),
-# Apache-2.0 weights, multivariate + exogenous support, and fast on CPU.
+# The selected TTM-R2 checkpoint is point-forecasting, while contract v1
+# requires predictive quantiles. Keep the architecture sketch for a later
+# point-output contract; it is not on the 0.1.0 release path.
 #
 # ---- Weight-map contract ----------------------------------------------------
 #
@@ -39,13 +39,14 @@ ttm_capabilities <- function(config) {
   new_tsfm_capabilities(
     architecture      = "ttm",
     max_context       = as.integer(config$context_length %||% config$seq_len %||% 512L),
-    quantiles         = "native",
-    multivariate      = TRUE,
+    quantiles         = "none",
+    quantile_levels   = numeric(),
+    multivariate      = FALSE,
     samples           = FALSE,
-    past_covariates   = TRUE,
-    future_covariates = TRUE,
+    past_covariates   = FALSE,
+    future_covariates = FALSE,
     static_covariates = FALSE,
-    fine_tunable      = TRUE,
+    fine_tunable      = FALSE,
     license           = "Apache-2.0"
   )
 }
@@ -54,31 +55,46 @@ ttm_capabilities <- function(config) {
 # character vector (checkpoint name -> module path). Filled during the numerical
 # port; kept here so the mapping lives in exactly one place.
 ttm_weight_map <- function(config) {
-  cli::cli_abort(c(
+  tsfm_abort_checkpoint(c(
     "The TTM weight map is not implemented yet.",
     "i" = "It is derived from the checkpoint's {.file config.json} at port time."
-  ))
+  ),
+  model_id = config$model_id %||% "ibm-granite/granite-timeseries-ttm-r2",
+  revision = config$revision %||% NA_character_,
+  expected = "complete state-dict mapping",
+  actual = "scaffold")
 }
 
 # Build the R torch nn_module for TTM from a parsed config. Deferred to the
 # numerical port (needs torch); isolated so only this + ttm_weight_map change.
 ttm_module <- function(config) {
-  rlang::check_installed("torch", reason = "to build the TTM network.")
-  cli::cli_abort("The native TTM nn_module is not implemented yet (Stage 1, in progress).")
+  tsfm_require_namespace("torch", reason = "It is needed to build the TTM network.")
+  tsfm_abort_checkpoint(
+    "The native TTM nn_module is deferred until a point-output contract exists.",
+    model_id = config$model_id %||% "ibm-granite/granite-timeseries-ttm-r2",
+    revision = config$revision %||% NA_character_,
+    expected = "checkpoint-compatible nn_module",
+    actual = "scaffold"
+  )
 }
 
 ttm_constructor <- function(config, weights = NULL) {
   caps <- ttm_capabilities(config)
 
   not_ready <- function(...) {
-    cli::cli_abort(c(
-      "The native TTM forward pass is not implemented yet (Stage 1, in progress).",
+    tsfm_abort_capability(c(
+      "The native TTM forward pass is not implemented.",
       "i" = "Numerical parity against {.val ibm-granite/granite-timeseries-ttm-r2} \\
              requires golden fixtures generated with the Hub checkpoint, torch, \\
              and reference {.pkg granite-tsfm}.",
-      "i" = "In the meantime use {.code tsfm_pretrained(\"stub\")} or the \\
-             Chronos-2 adapter via {.code tsfm_pretrained(\"amazon/chronos-2\")}."
-    ))
+      "i" = "TTM is deferred until the engine can represent point-only output.",
+      "i" = "Use {.code tsfm_pretrained(\"stub\")} to exercise the engine shell."
+    ),
+    model_id = config$model_id %||% "ibm-granite/granite-timeseries-ttm-r2",
+    revision = config$revision %||% NA_character_,
+    capability = "model_state",
+    requested = "scaffold",
+    supported = "supported")
   }
 
   new_tsfm_model(

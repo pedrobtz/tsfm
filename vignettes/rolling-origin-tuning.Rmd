@@ -18,6 +18,10 @@ empirically with the standard tidymodels tuning machinery over **rolling-origin*
 (time-aware) resamples, rather than random cross-validation that would leak the
 future into the past.
 
+The code below uses the executable `stub` fixture to demonstrate the mechanics.
+It is not a foundation-model benchmark; repeat the workflow with TimesFM only
+after that checkpoint passes the package's support gates.
+
 ## The spec
 
 Mark `context_length` for tuning; everything else is fixed through the engine:
@@ -32,7 +36,7 @@ library(rsample)
 
 spec <- tsfm_reg(context_length = tune()) |>
   set_engine("tsfm",
-             model_id = "google/timesfm-2.5-200m-pytorch",
+             model_id = "stub",
              index    = "date",
              id       = "store")
 
@@ -63,7 +67,7 @@ proper (quantile-aware) metric:
 
 ```{r}
 grid <- grid_regular(
-  context_length(range = c(128L, 2048L)),
+  context_length(range = c(64L, 512L)),
   levels = 5
 )
 
@@ -81,17 +85,10 @@ final_fit <- finalize_workflow(wf, best) |>
   fit(data = train_df)
 ```
 
-## modeltime.resample
-
-If your project lives in the modeltime ecosystem, the same models are usable
-through `modeltime.resample::modeltime_fit_resamples()` over
-`timetk::time_series_cv()` splits — `tsfm` engines register the same way
-modeltime's own engines do, so no bridge code is required.
-
 ## Notes
 
-- Tuning `context_length` is model-agnostic: swap `model_id` to compare how
-  different foundation models respond to more or less history.
+- `context_length` bounds the most recent history retained by each fitted
+  engine; the end-to-end behavior is covered with the stub in package tests.
 - The heavy per-candidate cost is inference, not training (these are zero-shot
   models), so keep the grid small and prefer `sliding_period()` windows that
   reflect your real forecast horizon.

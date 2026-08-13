@@ -1,15 +1,14 @@
 # parsnip engine `tsfm_reg` / engine "tsfm".
 #
-# This is the deliverable behind the Stage 1 exit criterion: with a parsnip
-# spec, a foundation model becomes exchangeable inside a workflow() by editing
-# one engine argument (`model_id`) --- the R analogue of Darts' "change only the
-# model name". The spec's sole tunable main argument is `context_length`;
+# A parsnip spec makes a supported model usable inside a workflow() by passing
+# its checkpoint identity as an engine argument. The spec's sole tunable main
+# argument is `context_length`;
 # everything model-specific (`model_id`, `revision`, the time `index`, the
 # series `id`, `quantile_levels`) is passed through `set_engine()`.
 #
 # Registration is lazy (from .onLoad, only when parsnip is installed) and wrapped
-# defensively so it can never block package load. The workflow path is validated
-# in the parsnip-gated tests; in a torch/Hub-less sandbox those skip.
+# defensively so it can never block package load. The full fit/predict path is
+# validated with the weight-free stub in the parsnip-gated tests.
 
 #' A parsnip specification for time-series foundation models
 #'
@@ -18,13 +17,14 @@
 #' @param context_length Optional context length (tunable).
 #' @details
 #' Model-specific settings are supplied through `set_engine("tsfm", ...)`:
-#' `model_id` (required, e.g. `"amazon/chronos-2"`), `revision`, `index`
+#' `model_id` (required; use `"stub"` for the executable test fixture),
+#' `revision`, `index`
 #' (time column), `id` (series column), and `quantile_levels`.
 #'
 #' @examples
 #' \dontrun{
 #' spec <- tsfm_reg(context_length = 512) |>
-#'   parsnip::set_engine("tsfm", model_id = "amazon/chronos-2",
+#'   parsnip::set_engine("tsfm", model_id = "stub",
 #'                       index = "date", id = "store")
 #' }
 #' @return A parsnip `model_spec`.
@@ -42,15 +42,37 @@ tsfm_reg <- function(mode = "regression", engine = "tsfm",
   )
 }
 
-# Fit bridge invoked by parsnip. `model_id`/`revision`/`index`/`id`/
-# `quantile_levels` arrive as engine args; `context_length` as the main arg.
-tsfm_parsnip_fit <- function(formula, data, model_id, revision = "main",
+#' Fit bridge used by the parsnip engine
+#'
+#' This exported bridge is an implementation detail required by parsnip's
+#' package-qualified engine registration. Users normally call [tsfm_reg()] and
+#' `parsnip::fit()` rather than invoking it directly.
+#'
+#' @param formula,data Passed by parsnip's formula fit interface.
+#' @param model_id,revision,device,reuse Checkpoint identity and lifecycle
+#'   arguments passed to [tsfm_pretrained()].
+#' @param index,id Time-index and optional series-id columns.
+#' @param quantile_levels Quantiles retained by the fitted engine.
+#' @param context_length Optional maximum history used at inference.
+#' @param ... Reserved for future engine arguments.
+#' @return A `tsfm_fit` object.
+#' @keywords internal
+#' @export
+tsfm_parsnip_fit <- function(formula, data, model_id, revision = NULL,
+                             device = NULL, reuse = TRUE,
                              index, id = NULL,
                              quantile_levels = c(0.1, 0.5, 0.9),
                              context_length = NULL, ...) {
-  model <- tsfm_pretrained(model_id, revision = revision)
+  model <- tsfm_pretrained(
+    model_id,
+    revision = revision,
+    device = device,
+    reuse = reuse,
+    ...
+  )
   if (!is.null(context_length)) {
     check_context_length(model$capabilities, context_length)
+    model$capabilities$max_context <- as.integer(context_length)
   }
   tsfm_fit(formula, data = data, model = model, index = index, id = id,
            quantile_levels = quantile_levels)
@@ -114,7 +136,7 @@ make_tsfm_reg <- function() {
   for (pkg in c("generics", "hardhat", "tune", "parsnip")) {
     if (requireNamespace(pkg, quietly = TRUE) &&
         exists("tunable", envir = asNamespace(pkg), inherits = FALSE)) {
-      rlang::s3_register(paste0(pkg, "::tunable"), "tsfm_reg", tunable_tsfm_reg)
+      vctrs::s3_register(paste0(pkg, "::tunable"), "tsfm_reg", tunable_tsfm_reg)
       break
     }
   }

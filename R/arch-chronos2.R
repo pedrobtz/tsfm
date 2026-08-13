@@ -1,43 +1,34 @@
-# Chronos-2 --- interim adapter, Stage 1.
+# Chronos-2 --- unregistered reference adapter.
 #
-# brulee already ships an end-to-end native Chronos-2 loader
-# (`brulee::brulee_chronos()`): pinned Hub download -> safetensors -> R torch,
-# frozen weights, quantile output. Rather than duplicate that for Stage 1, the
-# uniform API wraps it, so `tsfm_pretrained("amazon/chronos-2")` returns a model
-# that behaves like every other `tsfm_model`. Stage 3 replaces this adapter with
-# a native implementation that adds what brulee deliberately excludes
-# (multivariate targets, fine-tuning).
-#
-# STATUS: the constructor, capability metadata, and registry dispatch are wired
-# and testable; the forward pass calls into brulee, whose exact entry points are
-# resolved at call time and validated where brulee is installed (skipped in
-# sandboxes without it). The per-series bridge below adapts our
-# context-vector -> quantile-matrix contract onto brulee's data-frame interface.
+# This bridge predates the 0.1.0 native-engine scope. It is intentionally not
+# registered: its output conversion and per-series model construction have not
+# passed contract conformance or numerical parity. Keep it only as prior art for
+# a future native port after contract v2 can represent Chronos-2 inputs.
 
 chronos2_capabilities <- function(config) {
   new_tsfm_capabilities(
     architecture      = "chronos2",
     max_context       = as.integer(config$max_context %||% 8192L),
     quantiles         = "native",
-    multivariate      = FALSE,   # brulee_chronos is single-target; native in Stage 3
+    multivariate      = FALSE,
     samples           = FALSE,
-    past_covariates   = TRUE,
-    future_covariates = TRUE,
+    past_covariates   = FALSE,
+    future_covariates = FALSE,
     static_covariates = FALSE,
-    fine_tunable      = FALSE,   # brulee uses frozen weights
+    fine_tunable      = FALSE,
     license           = "Apache-2.0"
   )
 }
 
-# Forecast one series through brulee's Chronos-2. Builds a minimal data frame
+# Reference-only forecast bridge. Builds a minimal data frame
 # from the raw context (synthetic integer time index), asks brulee for `h`
 # steps at the requested quantile levels, and returns an h x length(levels)
 # matrix. brulee's precise argument names are resolved defensively so this keeps
 # working across brulee versions; validated in the brulee-gated tests.
 chronos2_forecast_series <- function(context, h, quantile_levels, config) {
-  rlang::check_installed(
+  tsfm_require_namespace(
     "brulee",
-    reason = "to run the Chronos-2 adapter (native Chronos-2 arrives in Stage 3)."
+    reason = "to inspect the unregistered Chronos-2 reference adapter."
   )
   train <- data.frame(
     .t = seq_along(context),

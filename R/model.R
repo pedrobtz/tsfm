@@ -15,6 +15,7 @@
 #'   numeric vector, oldest first); it returns a numeric matrix with `h` rows
 #'   and `length(quantile_levels)` columns of predictive quantiles.
 #' @param model_id,revision Provenance of the checkpoint.
+#' @param device Resolved execution device attached to the handle.
 #' @param params Optional opaque parameter/state object (e.g. a torch module);
 #'   `NULL` for the weight-free stub.
 #' @param predict_batch_fn Optional vectorised forward pass for true batched
@@ -23,7 +24,12 @@
 #'   per-series quantile matrices. When `NULL`, [tsfm_run_batches()] falls back
 #'   to looping `predict_fn`. Native torch architectures supply this; the stub
 #'   does not.
+#' @param contract_version The architecture-contract version this model was
+#'   written against; see `?`[tsfm-architecture-contract]. Defaults to the
+#'   version this installation implements.
 #' @return A `tsfm_model` object.
+#' @seealso `?`[tsfm-architecture-contract] for the full specification, and
+#'   [tsfm_check_architecture()] to verify an implementation against it.
 #' @export
 new_tsfm_model <- function(architecture,
                            config,
@@ -31,16 +37,39 @@ new_tsfm_model <- function(architecture,
                            predict_fn,
                            model_id = NA_character_,
                            revision = NA_character_,
+                           device = config$device %||% "cpu",
                            params = NULL,
-                           predict_batch_fn = NULL) {
+                           predict_batch_fn = NULL,
+                           contract_version = tsfm_contract_version()) {
   if (!inherits(capabilities, "tsfm_capabilities")) {
-    cli::cli_abort("{.arg capabilities} must be a {.cls tsfm_capabilities} object.")
+    tsfm_abort_contract(
+      "{.arg capabilities} must be a {.cls tsfm_capabilities} object.",
+      architecture = architecture,
+      model_id = model_id,
+      contract = "model construction",
+      expected = "tsfm_capabilities",
+      actual = class(capabilities)
+    )
   }
   if (!is.function(predict_fn)) {
-    cli::cli_abort("{.arg predict_fn} must be a function.")
+    tsfm_abort_contract(
+      "{.arg predict_fn} must be a function.",
+      architecture = architecture,
+      model_id = model_id,
+      contract = "model construction",
+      expected = "function(context, h, quantile_levels)",
+      actual = class(predict_fn)
+    )
   }
   if (!is.null(predict_batch_fn) && !is.function(predict_batch_fn)) {
-    cli::cli_abort("{.arg predict_batch_fn} must be a function or {.code NULL}.")
+    tsfm_abort_contract(
+      "{.arg predict_batch_fn} must be a function or {.code NULL}.",
+      architecture = architecture,
+      model_id = model_id,
+      contract = "model construction",
+      expected = "function or NULL",
+      actual = class(predict_batch_fn)
+    )
   }
   structure(
     list(
@@ -51,7 +80,9 @@ new_tsfm_model <- function(architecture,
       predict_batch_fn = predict_batch_fn,
       model_id         = as.character(model_id),
       revision         = as.character(revision),
-      params           = params
+      device           = as.character(device),
+      params           = params,
+      contract_version = package_version(contract_version)
     ),
     class = "tsfm_model"
   )
@@ -66,6 +97,7 @@ tsfm_capabilities.tsfm_model <- function(x, ...) {
 print.tsfm_model <- function(x, ...) {
   cli::cli_text("{.cls tsfm_model} {.strong {x$architecture}}")
   cli::cli_text("model_id: {.val {x$model_id}}  revision: {.val {x$revision}}")
+  cli::cli_text("device: {.val {x$device}}")
   print(x$capabilities)
   invisible(x)
 }

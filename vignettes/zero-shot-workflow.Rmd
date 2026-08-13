@@ -1,8 +1,8 @@
 ---
-title: "Zero-shot forecasting in a workflow"
+title: "Exercising the forecasting workflow"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{Zero-shot forecasting in a workflow}
+  %\VignetteIndexEntry{Exercising the forecasting workflow}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
@@ -11,20 +11,19 @@ vignette: >
 knitr::opts_chunk$set(collapse = TRUE, comment = "#>", eval = FALSE)
 ```
 
-`tsfm` gives every time-series foundation model one uniform, tidymodels-native
-interface. This vignette shows the two ways to forecast a panel of series, and
-the property that makes the package worth having: **swapping one foundation
-model for another means changing a single argument.**
+This vignette exercises the engine and adapter surfaces with `stub`, a
+weight-free random-walk fixture. It is not a foundation model. No real model is
+called supported until it passes contract conformance and numerical parity.
 
 ## Load a model
 
-`tsfm_pretrained()` resolves a model from the Hugging Face Hub (revision pinned)
-and returns a uniform handle. The same call works for every architecture:
+`tsfm_pretrained()` returns a uniform model handle. The stub branch is entirely
+local and deterministic:
 
 ```{r}
 library(tsfm)
 
-model <- tsfm_pretrained("amazon/chronos-2")
+model <- tsfm_pretrained("stub")
 ```
 
 Before doing any work, ask what the model can do. The capability report is
@@ -34,12 +33,12 @@ message instead of deep inside a tensor op:
 ```{r}
 tsfm_capabilities(model)
 #> <tsfm_capabilities>
-#>   architecture:      chronos2
-#>   max_context:       8192        quantiles: native
-#>   multivariate:      FALSE       samples:   no
-#>   past_covariates:   TRUE        future_covariates: TRUE
+#>   architecture:      stub
+#>   max_context:       512         quantiles: native
+#>   multivariate:      FALSE       samples:   FALSE
+#>   past_covariates:   FALSE       future_covariates: FALSE
 #>   static_covariates: FALSE       fine_tunable: FALSE
-#>   license:           Apache-2.0
+#>   license:           MIT
 ```
 
 ## Path 1 — the `forecast()` convenience surface (tsibble)
@@ -54,22 +53,26 @@ fc <- forecast(model, tourism_history, h = 12,
                quantile_levels = c(0.1, 0.5, 0.9))
 
 fc |>
-  as_fable() |>
+  fabletools::as_fable() |>
   fabletools::accuracy(tourism_actuals)
 ```
 
-## Path 2 — the tidymodels workflow (canonical)
+`tsfm` registers a method on `fabletools::as_fable()` rather than exporting a
+generic of its own, so the verb keeps working when fabletools and `tsfm` are
+both attached. Call it qualified, or `library(fabletools)` first.
 
-The canonical path is a `parsnip` spec inside a `workflow()`. The model is chosen
-by the engine's `model_id`; **everything else stays the same.**
+## Path 2 — a tidymodels workflow
+
+The tidymodels surface is a `parsnip` spec inside a `workflow()`. The model is
+chosen by the engine's `model_id`; **everything else stays the same.**
 
 ```{r}
 library(parsnip)
 library(workflows)
 
-spec <- tsfm_reg() |>
+spec <- tsfm_reg(context_length = 512L) |>
   set_engine("tsfm",
-             model_id = "amazon/chronos-2",
+             model_id = "stub",
              index    = "date",
              id       = "store")
 
@@ -78,20 +81,7 @@ wf <- workflow() |>
   add_model(spec)
 
 fit <- fit(wf, data = train_df)
-predict(fit, new_data = future_df)   # tibble: .pred, .pred_lower, .pred_upper, ...
-```
-
-### Swapping models is a one-line change
-
-To forecast with TTM instead of Chronos-2, edit only `model_id` — the R analogue
-of Darts' "change only the model name":
-
-```{r}
-spec_ttm <- tsfm_reg() |>
-  set_engine("tsfm",
-             model_id = "ibm-granite/granite-timeseries-ttm-r2",  # <- only change
-             index    = "date",
-             id       = "store")
+predict(fit, new_data = future_df)   # tibble: .pred
 ```
 
 ## Tuning the context length
@@ -104,7 +94,7 @@ library(tune)
 library(rsample)
 
 spec <- tsfm_reg(context_length = tune()) |>
-  set_engine("tsfm", model_id = "amazon/chronos-2", index = "date", id = "store")
+  set_engine("tsfm", model_id = "stub", index = "date", id = "store")
 
 tune_grid(
   workflow() |> add_formula(demand ~ date) |> add_model(spec),
@@ -115,7 +105,7 @@ tune_grid(
 
 ## Status
 
-`amazon/chronos-2` is served today through a `brulee`-backed adapter. The native
-TTM and TimesFM implementations follow on the roadmap; because the loader,
-capability, batching, forecast, and parsnip layers shown here are model-agnostic,
-those arrive as new architectures behind the *same* code above.
+The public workflow above is real, but its model is deliberately only a test
+fixture. TimesFM 2.5 is the first release target. TTM is deferred until the
+output contract represents point forecasts, and the old Chronos-2 Brulee bridge
+is retained as unregistered reference work only.

@@ -1,4 +1,10 @@
-# The hardhat bridge and the fitted-object contract.
+# ADAPTER: tidymodels. Not part of the engine core.
+#
+# The engine contract is `predict_fn(context, h, quantile_levels)` -> quantile
+# matrix (see ?`tsfm-architecture-contract`). This file is one of several
+# optional surfaces onto it; hardhat and parsnip are Suggests, and the engine
+# works fully without them. Peers: as_fable.tsfm_forecast() for the tidyverts,
+# and forecast.tsfm_model() for plain data frames and tsibbles.
 #
 # For a zero-shot foundation model, "fitting" binds the loaded model to a panel
 # of history: it validates the request against the model's capabilities, molds
@@ -26,11 +32,26 @@ tsfm_fit <- function(x, ...) {
 #' @export
 tsfm_fit.formula <- function(x, data, model, index, id = NULL,
                              quantile_levels = c(0.1, 0.5, 0.9), ...) {
+  if (!inherits(model, "tsfm_model")) {
+    tsfm_abort_contract(
+      "{.arg model} must be a {.cls tsfm_model} (see {.fn tsfm_pretrained}).",
+      contract = "fit input",
+      expected = "tsfm_model",
+      actual = class(model)
+    )
+  }
   targets <- all.vars(rlang::f_lhs(x))
   # Pre-flight: reject multivariate targets before any work if unsupported.
   check_capabilities(model$capabilities, multivariate = length(targets) > 1)
   if (length(targets) != 1L) {
-    cli::cli_abort("Stage 0 supports exactly one target column; got {length(targets)}.")
+    tsfm_abort_capability(
+      "Contract v1 supports exactly one target column; got {length(targets)}.",
+      model_id = model$model_id,
+      revision = model$revision,
+      capability = "multivariate",
+      requested = length(targets),
+      supported = 1L
+    )
   }
   tsfm_fit_data_frame(data, model, target = targets, index = index, id = id,
                       quantile_levels = quantile_levels)
@@ -47,13 +68,53 @@ tsfm_fit.data.frame <- function(x, model, target, index, id = NULL,
 
 tsfm_fit_data_frame <- function(data, model, target, index, id,
                                 quantile_levels) {
+  tsfm_require_namespace(
+    "hardhat",
+    reason = "for the tidymodels fit interface (the engine itself does not need it)."
+  )
   if (!inherits(model, "tsfm_model")) {
-    cli::cli_abort("{.arg model} must be a {.cls tsfm_model} (see {.fn tsfm_pretrained}).")
+    tsfm_abort_contract(
+      "{.arg model} must be a {.cls tsfm_model} (see {.fn tsfm_pretrained}).",
+      contract = "fit input",
+      expected = "tsfm_model",
+      actual = class(model)
+    )
+  }
+  quantile_levels <- check_quantile_levels(
+    model$capabilities,
+    quantile_levels,
+    model$model_id,
+    model$revision
+  )
+  fields <- list(target = target, index = index)
+  if (!is.null(id)) fields$id <- id
+  invalid <- vapply(
+    fields,
+    function(name) length(name) != 1L || !is.character(name) ||
+      is.na(name) || !nzchar(name),
+    logical(1)
+  )
+  if (any(invalid)) {
+    tsfm_abort_capability(
+      "Column arguments must each name exactly one column.",
+      model_id = model$model_id,
+      revision = model$revision,
+      capability = "input_columns",
+      requested = fields[invalid],
+      supported = names(data)
+    )
   }
   required <- c(target, index, id)
   missing <- setdiff(required, names(data))
   if (length(missing)) {
-    cli::cli_abort("Column{?s} {.val {missing}} not found in {.arg data}.")
+    tsfm_abort_capability(
+      "Column{?s} {.val {missing}} not found in {.arg data}.",
+      model_id = model$model_id,
+      revision = model$revision,
+      capability = "input_columns",
+      requested = missing,
+      supported = names(data)
+    )
   }
 
   # hardhat XY mold: validates/standardises the target as an outcome and yields
@@ -66,7 +127,14 @@ tsfm_fit_data_frame <- function(data, model, target, index, id,
   )
   y <- molded$outcomes[[1]]
   if (!is.numeric(y)) {
-    cli::cli_abort("Target {.val {target}} must be numeric; got {.cls {class(y)}}.")
+    tsfm_abort_capability(
+      "Target {.val {target}} must be numeric; got {.cls {class(y)}}.",
+      model_id = model$model_id,
+      revision = model$revision,
+      capability = "target_type",
+      requested = class(y),
+      supported = "numeric"
+    )
   }
 
   # Synthesise a single series id when none is supplied.
@@ -114,7 +182,14 @@ predict.tsfm_fit <- function(object, new_data, ...) {
   index <- object$index
   id <- object$id
   if (!index %in% names(new_data)) {
-    cli::cli_abort("Column {.val {index}} not found in {.arg new_data}.")
+    tsfm_abort_capability(
+      "Column {.val {index}} not found in {.arg new_data}.",
+      model_id = object$model$model_id,
+      revision = object$model$revision,
+      capability = "input_columns",
+      requested = index,
+      supported = names(new_data)
+    )
   }
   nd <- as.data.frame(new_data)
   if (!id %in% names(nd)) {
@@ -124,10 +199,15 @@ predict.tsfm_fit <- function(object, new_data, ...) {
   # Novel-level check, hardhat-style: every series in new_data must have history.
   novel <- setdiff(unique(nd[[id]]), names(object$histories))
   if (length(novel)) {
-    cli::cli_abort(c(
+    tsfm_abort_capability(c(
       "No fitted history for series {.val {novel}}.",
       "i" = "Every series in {.arg new_data} must appear in the training data."
-    ))
+    ),
+    model_id = object$model$model_id,
+    revision = object$model$revision,
+    capability = "series_history",
+    requested = novel,
+    supported = names(object$histories))
   }
 
   nd$.row <- seq_len(nrow(nd))

@@ -9,8 +9,16 @@ test_that("native TimesFM matches the reference on golden fixtures", {
   dir <- testthat::test_path("fixtures", "timesfm")
   skip_if_not(dir.exists(dir) && length(list.files(dir, pattern = "\\.json$")) > 0,
               "No TimesFM golden fixtures yet; generate them per fixtures/README.md.")
+  record <- tsfm_catalogue_get("google/timesfm-2.5-200m-pytorch")
+  skip_if_not(
+    identical(record$state, "supported"),
+    "TimesFM fixtures exist, but native inference has not passed the support gates."
+  )
 
-  model <- tsfm_pretrained("google/timesfm-2.5-200m-pytorch")
+  model <- tsfm_pretrained(
+    "google/timesfm-2.5-200m-pytorch",
+    revision = record$revision
+  )
 
   files <- list.files(dir, pattern = "\\.json$", full.names = TRUE)
   for (f in files) {

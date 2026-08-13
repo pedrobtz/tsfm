@@ -20,7 +20,12 @@ tsfm_infer <- function(model, histories, future_index, quantile_levels,
                        key_name = "key", index_name = "index",
                        target = ".response",
                        batch_size = NULL, device = NULL) {
-  quantile_levels <- sort(unique(as.numeric(quantile_levels)))
+  quantile_levels <- check_quantile_levels(
+    model$capabilities,
+    quantile_levels,
+    model$model_id,
+    model$revision
+  )
   # Always evaluate the median so the point forecast is exact.
   levels <- sort(unique(c(quantile_levels, 0.5)))
   median_col <- match(0.5, levels)
@@ -79,7 +84,10 @@ tsfm_infer <- function(model, histories, future_index, quantile_levels,
 # Build a distributional vector of predictive distributions from a quantile
 # matrix (rows = observations, cols = `levels`).
 build_distribution <- function(qmatrix, levels) {
-  rlang::check_installed("distributional", reason = "to store predictive distributions.")
+  tsfm_require_namespace(
+    "distributional",
+    reason = "It is needed to store predictive distributions."
+  )
   n <- nrow(qmatrix)
   if (n == 0L) {
     return(distributional::dist_percentile(list(), list()))
@@ -147,21 +155,25 @@ tsfm_quantile_columns <- function(fc) {
 
 #' Convert a tsfm forecast to a fable
 #'
-#' Produces a \pkg{fabletools} `fable` so the result flows into
+#' A method for [fabletools::as_fable()], so a `tsfm_forecast` flows into
 #' `fabletools::accuracy()`, reconciliation, and the tidyverts plotting stack.
+#'
+#' fabletools is an optional adapter dependency, so this method is registered
+#' lazily from `.onLoad()` via [vctrs::s3_register()] — it becomes available as
+#' soon as fabletools is loaded, and its absence never blocks loading tsfm.
+#' Call it as `fabletools::as_fable(x)`; tsfm deliberately does not define a
+#' competing `as_fable()` generic.
 #'
 #' @param x A `tsfm_forecast`.
 #' @param ... Unused.
 #' @return A `fable` object.
-#' @export
-as_fable <- function(x, ...) {
-  UseMethod("as_fable")
-}
-
-#' @export
+#' @name as_fable.tsfm_forecast
+#' @keywords internal
 as_fable.tsfm_forecast <- function(x, ...) {
-  rlang::check_installed(c("tsibble", "fabletools"),
-                         reason = "to convert forecasts to a fable.")
+  tsfm_require_namespace(
+    c("tsibble", "fabletools"),
+    reason = "They are needed to convert forecasts to a fable."
+  )
   key_name <- attr(x, "key_name")
   index_name <- attr(x, "index_name")
   target <- attr(x, "target")
@@ -170,11 +182,19 @@ as_fable.tsfm_forecast <- function(x, ...) {
   # Name the distribution column after the response, as fable expects; let
   # fable derive `.mean` from the distribution itself.
   df[[target]] <- df[[".distribution"]]
+  dimnames(df[[target]]) <- target
   df[[".distribution"]] <- NULL
   df[[".mean"]] <- NULL
 
-  # build_tsibble() accepts character key/index, avoiding a tidyselect dep.
-  tsbl <- tsibble::build_tsibble(df, key = key_name, index = index_name)
+  # Inject symbols so tsibble's tidy-select interface does not treat character
+  # column names as deprecated external selection vectors.
+  tsbl <- rlang::inject(
+    tsibble::build_tsibble(
+      df,
+      key = !!rlang::sym(key_name),
+      index = !!rlang::sym(index_name)
+    )
+  )
   # `distribution` is captured as a bare symbol by as_fable(); inject it.
   rlang::inject(
     fabletools::as_fable(
@@ -187,12 +207,21 @@ as_fable.tsfm_forecast <- function(x, ...) {
 
 # ---- forecast() convenience path (tsibble / data.frame) ---------------------
 
+# The `forecast()` verb is shared across the R forecasting ecosystem
+# (fabletools, modeltime, forecast) via the generic that lives in `generics`.
+# Re-exporting it — rather than defining a competing local generic — is what
+# keeps dispatch correct when tsfm is attached alongside those packages.
+
+#' @importFrom generics forecast
+#' @export
+generics::forecast
+
 #' Forecast future values with a foundation model
 #'
 #' The convenience surface: hand a panel of history and a horizon, get a
-#' `tsfm_forecast` back. The canonical tidymodels path is [tsfm_fit()] +
-#' `predict()`; this generic mirrors the tidyverts `forecast()` verb for
-#' `tsibble` users.
+#' `tsfm_forecast` back. This is a method for [generics::forecast()], the same
+#' generic fabletools and modeltime dispatch on, so attaching tsfm alongside
+#' them never masks the verb.
 #'
 #' @param object A `tsfm_model`.
 #' @param new_data A `tsibble` (index/key inferred) or a `data.frame`.
@@ -204,16 +233,16 @@ as_fable.tsfm_forecast <- function(x, ...) {
 #' @param ... Unused.
 #' @return A `tsfm_forecast`.
 #' @export
-forecast <- function(object, ...) {
-  UseMethod("forecast")
-}
-
-#' @rdname forecast
-#' @export
 forecast.tsfm_model <- function(object, new_data, h = 1L,
                                 quantile_levels = c(0.1, 0.5, 0.9),
                                 index = NULL, key = NULL, target = NULL,
                                 batch_size = NULL, device = NULL, ...) {
+  check_horizon(
+    object$capabilities,
+    h,
+    object$model_id,
+    object$revision
+  )
   h <- as.integer(h)
   spec <- panel_spec(new_data, index = index, key = key, target = target)
 
@@ -238,17 +267,28 @@ forecast.tsfm_model <- function(object, new_data, h = 1L,
 # when none is supplied so downstream code always groups by a key.
 panel_spec <- function(new_data, index = NULL, key = NULL, target = NULL) {
   if (inherits(new_data, "tbl_ts")) {
-    rlang::check_installed("tsibble")
+    tsfm_require_namespace("tsibble")
     index <- index %||% as.character(tsibble::index_var(new_data))
     key_vars <- tsibble::key_vars(new_data)
     key <- key %||% (if (length(key_vars)) key_vars[[1]] else NULL)
     measured <- setdiff(names(new_data), c(index, key_vars))
-    target <- target %||% measured[[1]]
+    target <- target %||% if (length(measured)) measured[[1]] else NULL
     data <- as.data.frame(new_data)
   } else {
+    if (!inherits(new_data, "data.frame")) {
+      tsfm_abort_capability(
+        "{.arg new_data} must be a data frame or tsibble.",
+        capability = "input_data",
+        requested = class(new_data),
+        supported = c("data.frame", "tbl_ts")
+      )
+    }
     if (is.null(index) || is.null(target)) {
-      cli::cli_abort(
-        "For a {.cls data.frame}, both {.arg index} and {.arg target} are required."
+      tsfm_abort_capability(
+        "For a {.cls data.frame}, both {.arg index} and {.arg target} are required.",
+        capability = "input_columns",
+        requested = c(index = index %||% NA_character_, target = target %||% NA_character_),
+        supported = names(new_data)
       )
     }
     data <- as.data.frame(new_data)
@@ -256,6 +296,31 @@ panel_spec <- function(new_data, index = NULL, key = NULL, target = NULL) {
   if (is.null(key)) {
     key <- ".series"
     data[[key]] <- ".series"
+  }
+  fields <- list(index = index, key = key, target = target)
+  invalid_names <- vapply(
+    fields,
+    function(name) length(name) != 1L || !is.character(name) ||
+      is.na(name) || !nzchar(name),
+    logical(1)
+  )
+  missing <- names(fields)[invalid_names]
+  if (!length(missing)) missing <- setdiff(unlist(fields), names(data))
+  if (length(missing)) {
+    tsfm_abort_capability(
+      "Required column{?s} {.val {missing}} {?is/are} not available.",
+      capability = "input_columns",
+      requested = missing,
+      supported = names(data)
+    )
+  }
+  if (!is.numeric(data[[target]])) {
+    tsfm_abort_capability(
+      "Target {.val {target}} must be numeric.",
+      capability = "target_type",
+      requested = class(data[[target]]),
+      supported = "numeric"
+    )
   }
   data <- data[order(data[[key]], data[[index]]), , drop = FALSE]
   list(data = data, index = index, key = key, target = target)

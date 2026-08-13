@@ -1,8 +1,9 @@
 ^tsfm\.Rproj$
 ^\.Rproj\.user$
 ^\.github$
-^plan\.md$
-^roadmap\.md$
+^\.agents$
+^AGENTS\.md$
+^CLAUDE\.md$
 ^LICENSE\.md$
 ^\.claude$
 ^cran-comments\.md$

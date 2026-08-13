@@ -1,27 +1,30 @@
 ## R CMD check results
 
-0 errors | 0 warnings | 1 note
+Local check on 2026-08-13:
 
-* This is a new submission.
+0 errors | 0 warnings | 0 notes
 
-## Test environments
+The package was checked with R 4.5.2 on macOS Sequoia 15.7.7 using
+the built source package, with vignettes enabled and all declared Imports and
+Suggests installed.
 
-* local: not applicable (see note below)
-* GitHub Actions: ubuntu-latest (R release)
+## Test scope
 
-## Notes for the maintainer (remove before submitting)
+* The deterministic, network-free test suite passed.
+* Native TimesFM parity skipped because its golden fixtures now exist but the
+  full native forward implementation is Stage 3 work. TTM parity skipped
+  because that architecture remains deferred. Neither is claimed as supported.
+* The native TimesFM operator-feasibility fixture ran on CPU and matched the
+  pinned official reference output; this is not an end-to-end model parity
+  claim.
+* The opt-in 925 MB checkpoint test was run separately against the local Hub
+  cache and loaded all 232 tensors. Normal checks use synthetic safetensors and
+  never access the network.
+* The stub exercised plain-R forecasting, the hardhat fit/predict bridge,
+  parsnip `fit()`/`predict()`, and fable conversion.
 
-Before the first CRAN submission, confirm the following in a full
-`R CMD check --as-cran` on a machine with the Suggests installed:
+## Release status
 
-* Downloads and Hub access happen only on first user call, never at check time.
-  All tests that touch the Hub, torch weights, or the network use
-  `skip_on_cran()` / `skip_if_not_installed()`; parity tests run off committed
-  golden fixtures.
-* `torch` and `safetensors` are declared in Imports for the target design but
-  are exercised by the native architectures; if a native port has not yet
-  landed at submission time, verify there is no "unused import" NOTE or move
-  them to Suggests for that release.
-* Examples that require a model download are wrapped in `\dontrun{}`.
-* The package never redistributes model weights; each model's weight licence is
-  surfaced via `tsfm_capabilities()`.
+This is a development baseline, not a CRAN submission candidate. No real
+foundation model is supported yet. TimesFM 2.5 must pass both contract
+conformance and pinned numerical parity before `0.1.0`.
