@@ -75,16 +75,76 @@ test_that("architecture return matrices are validated at the engine boundary", {
   expect_identical(error$expected, c(2L, 2L))
 })
 
-test_that("unsupported trained quantiles fail before a scaffold forward pass", {
-  model <- timesfm_constructor(list(
-    context_length = 16384L,
-    quantile_horizon_length = 1024L,
-    quantiles = seq(0.1, 0.9, by = 0.1)
-  ))
+test_that("unsupported trained quantiles fail before a TimesFM forward pass", {
+  config <- timesfm_test_config()
+  model <- new_tsfm_model(
+    architecture = "timesfm",
+    config = config,
+    capabilities = timesfm_capabilities(config),
+    predict_fn = function(...) stop("inference was reached")
+  )
   error <- expect_error(
     tsfm_run_batches(model, list(1:32), 2, c(0.05, 0.5)),
     class = "tsfm_error_quantile_levels"
   )
   expect_equal(error$requested, c(0.05, 0.5))
   expect_equal(error$supported, seq(0.1, 0.9, by = 0.1))
+})
+
+test_that("architectures receive the checkpoint's own quantile levels", {
+  # The catalogue advertises seq(0.1, 0.9, by = 0.1) while config.json parses
+  # literals; they differ at 0.3 and 0.7. Reading the levels off the catalogue
+  # and forecasting with them is the documented consumer path, so the engine
+  # must hand the architecture values it can select channels with by position.
+  literal <- jsonlite::fromJSON("[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]")
+  seen <- NULL
+  model <- new_tsfm_model(
+    architecture = "recorder",
+    config = list(),
+    capabilities = new_tsfm_capabilities(
+      "recorder", max_context = 128L, quantile_levels = literal
+    ),
+    predict_fn = function(context, h, quantile_levels) {
+      seen <<- quantile_levels
+      matrix(rep(stats::qnorm(quantile_levels), each = h), nrow = h)
+    }
+  )
+
+  advertised <- tsfm_models(state = NULL)$quantile_levels[[1]]
+  out <- tsfm_run_batches(model, list(1:32), 2L, advertised)
+  expect_identical(seen, literal)
+  expect_true(all(is.finite(out[[1]])))
+  expect_identical(dim(out[[1]]), c(2L, 9L))
+})
+
+test_that("interrupts between batches propagate without a partial result", {
+  model <- tsfm_pretrained("stub")
+  completed <- 0L
+  model$predict_batch_fn <- function(contexts, horizons, quantile_levels, device) {
+    completed <<- completed + length(contexts)
+    lapply(seq_along(contexts), function(i) {
+      model$predict_fn(contexts[[i]], horizons[[i]], quantile_levels)
+    })
+  }
+  checks <- 0L
+  old <- options(tsfm.interrupt_check = function() {
+    checks <<- checks + 1L
+    if (checks == 2L) {
+      stop(structure(
+        list(message = "simulated user interrupt", call = NULL),
+        class = c("interrupt", "error", "condition")
+      ))
+    }
+  })
+  on.exit(options(old), add = TRUE)
+  result <- NULL
+  expect_condition(
+    result <- tsfm_run_batches(
+      model, rep(list(1:8), 3L), rep(2L, 3L), c(0.1, 0.5, 0.9),
+      batch_size = 1L
+    ),
+    class = "interrupt"
+  )
+  expect_identical(completed, 1L)
+  expect_null(result)
 })

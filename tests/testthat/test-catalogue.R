@@ -5,9 +5,11 @@ test_that("the safe catalogue default only returns supported checkpoints", {
   supported <- tsfm_models()
   all <- tsfm_models(state = NULL)
 
-  expect_identical(nrow(supported), 0L)
+  expect_identical(nrow(supported), 1L)
+  expect_identical(supported$model_id, "google/timesfm-2.5-200m-pytorch")
+  expect_identical(supported$max_context, 16256L)
   expect_identical(nrow(all), 2L)
-  expect_setequal(unique(all$state), "scaffold")
+  expect_setequal(unique(all$state), c("supported", "scaffold"))
   expect_true(all(grepl("^[0-9a-f]{40}$", all$revision)))
   expect_true(is.list(all$quantile_levels))
   expect_false(any(all$multivariate))
@@ -73,7 +75,7 @@ test_that("scaffold checkpoints fail before download", {
     tsfm_resolve_config = function(...) stop("download path was reached")
   )
   error <- expect_error(
-    tsfm_pretrained("google/timesfm-2.5-200m-pytorch"),
+    tsfm_pretrained("ibm-granite/granite-timeseries-ttm-r2"),
     class = "tsfm_error_capability"
   )
   expect_identical(error$capability, "model_state")

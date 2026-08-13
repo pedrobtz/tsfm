@@ -21,6 +21,9 @@
       ]
     }
   ],
+  "context_files": [
+    "short_context-context-1.f32"
+  ],
   "max_context": 32,
   "horizon": 8,
   "quantile_levels": [
@@ -138,5 +141,6 @@
       ]
     ]
   ],
-  "tolerance": 0.0001
+  "atol": 0.0001,
+  "rtol": 1e-05
 }

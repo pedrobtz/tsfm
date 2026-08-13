@@ -1,17 +1,3 @@
-timesfm_test_config <- function() {
-  list(
-    architecture = "timesfm",
-    hidden_size = 1280L,
-    intermediate_size = 1280L,
-    head_dim = 80L,
-    num_hidden_layers = 20L,
-    patch_length = 32L,
-    horizon_length = 128L,
-    quantile_horizon_length = 1024L,
-    quantiles = seq(0.1, 0.9, by = 0.1)
-  )
-}
-
 test_that("the pinned TimesFM state layout captures all names and parameters", {
   spec <- timesfm_expected_state_spec(timesfm_test_config())
   expect_length(spec, 232L)
@@ -22,6 +8,19 @@ test_that("the pinned TimesFM state layout captures all names and parameters", {
   )
   expect_identical(spec[["tokenizer.hidden_layer.weight"]], c(1280L, 64L))
   expect_equal(sum(vapply(spec, prod, numeric(1))), 231289280)
+})
+
+test_that("the native module has a complete identity weight map", {
+  skip_if_not_installed("torch")
+  config <- timesfm_test_config()
+  module <- timesfm_module(config)
+  map <- timesfm_weight_map(config)
+  expect_length(module$state_dict(), 232L)
+  expect_identical(names(map), unname(map))
+  expect_setequal(names(module$state_dict()), unname(map))
+  expect_true(all(vapply(
+    module$state_dict(), function(x) identical(x$device$type, "meta"), logical(1)
+  )))
 })
 
 test_that("TimesFM header validation is exact and classed", {

@@ -18,8 +18,8 @@ catalogue of natively implemented time-series foundation models (TSFMs) behind
 one capability-aware interface. `tsfm` is building that layer:
 
 - **One loader.** `tsfm_pretrained("...")` resolves a supported model into a
-  uniform handle. The current executable model is the weight-free `stub` test
-  fixture; the first native release target is TimesFM 2.5.
+  uniform handle. TimesFM 2.5 is the first supported native architecture; the
+  weight-free `stub` remains the fast engine test fixture.
 - **One contract.** Every architecture implements
   `predict_fn(context, h, quantile_levels)` and nothing more. See
   `` ?`tsfm-architecture-contract` `` and verify yours with
@@ -43,8 +43,18 @@ equal standing**, all in `Suggests`:
 | Adapter | Surface | Needs |
 |---------|---------|-------|
 | plain R | `forecast()` on a `data.frame`, `as.data.frame()` | — |
-| tidyverts | `fabletools::as_fable()` → `fable` | `fabletools`, `tsibble` |
+| tidyverts | `fabletools::as_fable()` → `fable`; `TSFM()` inside `fabletools::model()` | `fabletools`, `tsibble` |
 | tidymodels | `tsfm_fit()` / `predict()`, `tsfm_reg()` parsnip spec | `hardhat`, `parsnip` |
+
+There are two routes into the tidyverts, and they trade convenience for
+throughput. `forecast(model, panel, h) |> fabletools::as_fable()` runs **one
+batched call** across every series. `TSFM()` composes inside
+`fabletools::model()` next to ARIMA or ETS, but fabletools evaluates one key at
+a time, so the engine sees a batch of one per series; the checkpoint is loaded
+once and reused from the resident cache. Note that fabletools derives `.mean`
+from the distribution, so a `TSFM()` fable reports the distribution's mean while
+the other routes report the engine's exact median — `median()` recovers the
+point forecast on any route. See `vignette("timesfm-zero-shot")`.
 
 `tsfm` deliberately does **not** define competing `forecast()` or `as_fable()`
 generics: it re-exports `generics::forecast` and registers its `as_fable` method
@@ -58,11 +68,9 @@ onto `fabletools`, so attaching `tsfm` alongside them never masks the verbs.
 pak::pak("pedrobtz/tsfm")
 ```
 
-The current development baseline exercises forecasting without downloading
-weights. The checkpoint pipeline itself is now available: explicit prefetch,
-safetensors validation/loading, disk/resident cache inspection, and bounded
-constructed-handle reuse. TimesFM inference remains blocked until the native
-module passes the committed golden fixtures.
+The pinned TimesFM checkpoint is about 925 MB. It is downloaded once through
+`hfhub`, loaded into native R `torch`, and reused from a bounded in-session
+handle cache. Use `tsfm_download()` to prefetch it explicitly.
 
 ## Quick start
 
@@ -84,9 +92,15 @@ as.data.frame(fc)
 
 # Optional tidyverts adapter.
 fc |> fabletools::as_fable()
+
+# Or compose the model inside a mable, next to any other tidyverts model.
+fits <- fabletools::model(tsibble_panel, tsfm = TSFM(value, model_id = "stub"))
+fabletools::forecast(fits, h = 6)
 ```
 
-See `vignette("zero-shot-workflow")` and `vignette("rolling-origin-tuning")`.
+Swap `"stub"` for `"google/timesfm-2.5-200m-pytorch"` and the same code runs the
+real checkpoint — see `vignette("timesfm-zero-shot")`, plus
+`vignette("zero-shot-workflow")` and `vignette("rolling-origin-tuning")`.
 
 ## Adding an architecture
 
@@ -120,24 +134,39 @@ tsfm_models() # safe default: supported checkpoints only
 | Model | id | Status |
 |-------|----|--------|
 | Stub | `stub` | executable random-walk test fixture; not a foundation model |
-| TimesFM 2.5 | `google/timesfm-2.5-200m-pytorch` | registered scaffold; forward pass not implemented |
+| TimesFM 2.5 | `google/timesfm-2.5-200m-pytorch` | supported native point and 0.1–0.9 quantile inference |
 | TTM (TinyTimeMixer) | `ibm-granite/granite-timeseries-ttm-r2` | registered scaffold; deferred until point-only output is supported |
 | Chronos-2 | `amazon/chronos-2` | unregistered reference adapter; not supported in `0.1.0` |
 
-No real foundation model is supported yet. “Supported” will require both the
-architecture conformance gate and numerical parity against a pinned reference.
+TimesFM is marked supported because it passes both the architecture conformance
+gate and every committed numerical-parity fixture against the pinned official
+implementation.
 
 Third parties can register additional architectures with
 `tsfm_register_arch()` — no fork required.
+
+#### Horizon and effective context
+
+TimesFM's 16,384 positions cover the context **and** the forecast, and a request
+consumes whole 128-value output blocks, so the history actually used is
+`16384 - ceiling(h / 128) * 128`:
+
+| Horizon | Observations used |
+|---|---|
+| 1–128 | 16,256 (the reported `max_context`) |
+| 129–256 | 16,128 |
+| 1024 (the maximum) | 15,360 |
+
+`max_context` reports the best case. Longer histories are truncated to the most
+recent values, per series — a forecast never depends on which other series share
+its batch.
 
 ### Checkpoint provenance, cache, size, and licence
 
 The TimesFM feasibility work is pinned to official source commit
 `3dae50b20d7a724981e8ea36cda75578f80dd2dc` and checkpoint revision
 `1d952420fba87f3c6dee4f240de0f1a0fbc790e3`. The catalogue never resolves a
-moving `main` branch for curated support metadata. TimesFM remains a
-`scaffold`: `tsfm_pretrained()` rejects it before Hub or tensor work until the
-full loader and numerical-parity gates pass.
+moving `main` branch for curated support metadata.
 
 `cached` means every file in the checkpoint's static manifest is already in
 the cache managed by `hfhub`. Probes always set `local_files_only = TRUE`.
@@ -150,7 +179,7 @@ manifest definition yet.
 pinned TimesFM `model.safetensors` is 925,181,104 bytes (about 925 MB, or 882
 MiB), excluding small metadata files and live tensor/runtime overhead. The
 catalogue's `license` column is the upstream **weight** licence—Apache-2.0 for
-the two current scaffold records—not the package's MIT licence. `tsfm` reports
+the current curated records—not the package's MIT licence. `tsfm` reports
 the upstream terms and never accepts gated-repository terms on a user's behalf.
 
 ### Download and constructed-handle lifecycle
@@ -164,8 +193,7 @@ tsfm_unload() # releases resident handles; does not delete Hub files
 
 `tsfm_download(model_id, revision = NULL)` explicitly fetches a curated
 checkpoint manifest and returns its local paths invisibly without constructing
-a module. It may be used to stage a scaffold checkpoint for development, but
-`tsfm_pretrained()` still rejects non-supported catalogue states before any
+a module. `tsfm_pretrained()` rejects non-supported catalogue states before any
 download or tensor work.
 
 Constructed handles use an R-session least-recently-used cache keyed by model

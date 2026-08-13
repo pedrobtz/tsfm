@@ -119,6 +119,11 @@ def main() -> None:
 
   for case in fixture_cases():
     contexts = [materialize_context(spec) for spec in case["contexts"]]
+    context_files = []
+    for index, context in enumerate(contexts, start=1):
+      context_file = f"{case['name']}-context-{index}.f32"
+      np.asarray(context, dtype="<f4").tofile(output_dir / context_file)
+      context_files.append(context_file)
     forecast_config = configs.ForecastConfig(
         max_context=case["max_context"],
         max_horizon=round_up(case["horizon"], 128),
@@ -145,13 +150,21 @@ def main() -> None:
         "fix_quantile_crossing": True,
       },
       "context_specs": case["contexts"],
+      "context_files": context_files,
       "max_context": case["max_context"],
       "horizon": case["horizon"],
       "quantile_levels": QUANTILE_LEVELS,
       "expected_point": point.tolist(),
       # Channel zero is the mean and channels 1:10 are the trained quantiles.
       "expected_quantiles": full[..., 1:].tolist(),
-      "tolerance": 1e-4,
+      # Compared as |actual - expected| <= atol + rtol * |expected|, the
+      # criterion torch.testing.assert_close() and the upstream TimesFM tests
+      # use. A single absolute number is the wrong shape here: these forecasts
+      # sit near 116, where 1e-4 absolute is 8.6e-7 relative --- tighter than
+      # PyTorch's own float32 default --- while the same number would be very
+      # loose on a series near zero.
+      "atol": 1e-4,
+      "rtol": 1e-5,
     }
     if case["name"] == "batch_agreement":
       model.compile(

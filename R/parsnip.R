@@ -31,6 +31,10 @@
 #' @export
 tsfm_reg <- function(mode = "regression", engine = "tsfm",
                      context_length = NULL) {
+  tsfm_require_namespace(
+    "parsnip",
+    reason = "It provides the tidymodels specification interface (the engine itself does not need it)."
+  )
   args <- list(context_length = rlang::enquo(context_length))
   parsnip::new_model_spec(
     "tsfm_reg",
@@ -164,6 +168,10 @@ tunable_tsfm_reg <- function(x, ...) {
 #' @return A `dials` quantitative parameter.
 #' @export
 context_length <- function(range = c(64L, 2048L), trans = NULL) {
+  tsfm_require_namespace(
+    "dials",
+    reason = "It provides the tunable parameter objects used by the tidymodels adapter."
+  )
   dials::new_quant_param(
     type      = "integer",
     range     = range,

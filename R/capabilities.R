@@ -237,6 +237,25 @@ check_horizon <- function(caps, h,
   invisible(caps)
 }
 
+# Match requested levels against the levels a checkpoint was trained on.
+#
+# Doubles that print identically need not be bit-identical: seq(0.1, 0.9, by =
+# 0.1) differs from the literals parsed out of config.json at 0.3 and 0.7. Every
+# native-quantile architecture selects its output channel *by position*, so the
+# match is tolerant and the engine carries the matched supported value forward
+# rather than whichever spelling the caller happened to use. Returns positions
+# into `supported`, `NA` where a level has no counterpart.
+tsfm_match_quantile_levels <- function(levels, supported) {
+  vapply(
+    as.numeric(levels),
+    function(level) {
+      hit <- which(abs(supported - level) <= sqrt(.Machine$double.eps))
+      if (length(hit)) as.integer(hit[[1L]]) else NA_integer_
+    },
+    integer(1)
+  )
+}
+
 check_quantile_levels <- function(caps, quantile_levels,
                                   model_id = NA_character_,
                                   revision = NA_character_,
@@ -276,21 +295,34 @@ check_quantile_levels <- function(caps, quantile_levels,
   }
   supported <- caps$quantile_levels
   if (!is.null(supported)) {
-    present <- vapply(
-      levels,
-      function(level) any(abs(supported - level) <= sqrt(.Machine$double.eps)),
-      logical(1)
-    )
-    if (!all(present)) {
+    matched <- tsfm_match_quantile_levels(levels, supported)
+    if (anyNA(matched)) {
       tsfm_abort_quantile_levels(
         c(
           "The checkpoint does not emit every requested quantile level.",
-          "x" = "Unsupported: {.val {levels[!present]}}.",
+          "x" = "Unsupported: {.val {levels[is.na(matched)]}}.",
           "i" = "Supported levels: {.val {supported}}."
         ),
         model_id = model_id,
         revision = revision,
         requested = levels,
+        supported = supported,
+        call = call
+      )
+    }
+    # Hand back the checkpoint's own values, so architectures selecting an
+    # output channel never have to re-derive a match the engine already made.
+    levels <- supported[matched]
+    if (anyDuplicated(levels)) {
+      tsfm_abort_quantile_levels(
+        c(
+          "Several requested quantile levels resolve to the same trained level.",
+          "x" = "Duplicated after matching: {.val {unique(levels[duplicated(levels)])}}.",
+          "i" = "Supported levels: {.val {supported}}."
+        ),
+        model_id = model_id,
+        revision = revision,
+        requested = quantile_levels,
         supported = supported,
         call = call
       )

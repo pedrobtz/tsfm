@@ -38,8 +38,11 @@ test_that("TimesFM spike matches the pinned official transformer block", {
   )
   expected_embeddings <- torch::torch_tensor(expected_embeddings)$reshape(c(1, 3, 4))
   expected_quantiles <- torch::torch_tensor(expected_quantiles)$reshape(c(1, 3, 3, 3))
-  expect_lt(max(abs(as.numeric(output$embeddings - expected_embeddings))), 1e-6)
-  expect_lt(max(abs(as.numeric(output$quantiles - expected_quantiles))), 1e-6)
+  # PyTorch's float32 defaults, which is what upstream TimesFM's own layer tests
+  # compare with; see expect_close_f32() for why the criterion is scale-aware
+  # rather than a single absolute threshold.
+  expect_close_f32(output$embeddings, expected_embeddings)
+  expect_close_f32(output$quantiles, expected_quantiles)
 })
 
 test_that("fused QKV loading preserves the upstream out-by-in layout", {

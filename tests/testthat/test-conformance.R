@@ -53,15 +53,13 @@ test_that("the built-in stub satisfies the contract", {
   )
 })
 
-test_that("the TTM and TimesFM scaffolds do not yet satisfy the contract", {
+test_that("the TTM scaffold does not yet satisfy the contract", {
   # Their forward passes abort by design until the numerical port lands. The
   # harness must report that as a failure, not mistake it for a clean refusal:
   # this is the gate those ports have to turn green.
   ttm <- check_report(function(config, weights) ttm_constructor(config))
   expect_true("predict_fn returns an h x q numeric matrix" %in% failures(ttm))
 
-  timesfm <- check_report(function(config, weights) timesfm_constructor(config))
-  expect_true("predict_fn returns an h x q numeric matrix" %in% failures(timesfm))
 })
 
 test_that("a non-tsfm_model constructor fails fast", {
@@ -142,6 +140,25 @@ test_that("an agreeing batch path passes", {
 test_that("no batch path is not-applicable rather than a failure", {
   report <- check_report(conforming_arch())
   expect_true(is.na(report$ok[report$name == "predict_batch_fn agrees with predict_fn"]))
+})
+
+test_that("an unexercised max_context is not-applicable rather than a pass", {
+  # The default 64-value probe cannot reach a 128-value limit, let alone
+  # TimesFM's 16,256. Reporting a pass there would overstate what ran.
+  short <- check_report(conforming_arch(max_context = 128L))
+  row <- short$ok[short$name == "respects its declared max_context"]
+  expect_true(is.na(row))
+  expect_match(
+    short$message[short$name == "respects its declared max_context"],
+    "Not exercised"
+  )
+
+  # Given a context long enough to truncate, the check actually runs.
+  exercised <- check_report(
+    conforming_arch(max_context = 32L),
+    context = default_check_context(128L)
+  )
+  expect_true(exercised$ok[exercised$name == "respects its declared max_context"])
 })
 
 test_that("a mismatched major contract version is caught", {

@@ -8,15 +8,14 @@ Description: An inference engine under development for running open
     'from_pretrained()'-style loader with an open architecture registry, a
     versioned execution contract and conformance harness, explicit capability
     metadata, batched panel inference with device resolution, and a standard
-    forecast object backed by 'distributional'. The current executable model
-    is a weight-free test fixture; native model support requires numerical
-    parity against a pinned reference implementation. The engine is
+    forecast object backed by 'distributional'. The first supported native
+    architecture is TimesFM 2.5, loaded from an immutable checkpoint and
+    verified against pinned reference outputs. The engine is
     framework-neutral, with optional adapters for 'tidymodels' (via 'hardhat'
     and 'parsnip') and the tidyverts (via 'fabletools').
 License: MIT + file LICENSE
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
-RoxygenNote: 7.3.3
 URL: https://github.com/pedrobtz/tsfm
 BugReports: https://github.com/pedrobtz/tsfm/issues
 Depends:
@@ -32,7 +31,6 @@ Imports:
     torch,
     vctrs
 Suggests:
-    brulee,
     dials,
     fabletools,
     hardhat,
@@ -47,3 +45,4 @@ Suggests:
     yardstick
 VignetteBuilder: knitr
 Config/testthat/edition: 3
+Config/roxygen2/version: 8.0.0

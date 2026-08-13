@@ -179,12 +179,14 @@ as_fable.tsfm_forecast <- function(x, ...) {
   target <- attr(x, "target")
 
   df <- as.data.frame(x)
-  # Name the distribution column after the response, as fable expects; let
-  # fable derive `.mean` from the distribution itself.
+  # Name the distribution column after the response, as fable expects.
   df[[target]] <- df[[".distribution"]]
   dimnames(df[[target]]) <- target
   df[[".distribution"]] <- NULL
-  df[[".mean"]] <- NULL
+  # Keep `.mean`. `as_fable()` does not synthesise it the way
+  # `fabletools::forecast()` does, so dropping it here produced a fable whose
+  # `.mean` was silently NULL. The retained value is the engine's exact median
+  # (see tsfm_infer()), which is also `median()` of the distribution beside it.
 
   # Inject symbols so tsibble's tidy-select interface does not treat character
   # column names as deprecated external selection vectors.

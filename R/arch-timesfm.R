@@ -1,46 +1,82 @@
-# TimesFM 2.5 --- 0.1.0 release-model scaffold.
-#
-# STATUS: scaffold, mirroring the TTM approach (see arch-ttm.R). Capabilities,
-# config parsing, registry dispatch, and the weight-map contract are wired; the
-# numerical forward pass and the safetensors -> nn_module mapping land once
-# golden parity fixtures are generated against google/timesfm-2.5-200m-pytorch
-# (needs the Hub checkpoint, R torch with a libtorch backend, and the reference
-# `timesfm` Python package). Until then the forward pass errors with a clear
-# pointer rather than returning unverified numbers.
-#
-# Why TimesFM is the release model (see roadmap): highest-demand missing model; a
-# decoder-only patching transformer, so it is the first architecture to exercise
-# real attention blocks, quantile heads, and long contexts in R torch.
-#
-# ---- Weight-map contract ----------------------------------------------------
-#
-# TimesFM 2.5 (decoder-only patched transformer, per google-research/timesfm):
-#
-#   input_ff_layer / residual_block   patch embedding: reshape context into
-#                                     patches of `patch_len`, project to d_model
-#   stacked_transformer.layers.{i}.*  N decoder layers, each:
-#       .self_attn                      causal multi-head attention over patches
-#       .mlp                            position-wise feed-forward
-#       .*_layernorm                    pre/post norms
-#   freq_emb                          frequency embedding (per-series period)
-#   horizon_ff_layer / output head    project final patch -> output_patch_len x
-#                                     n_quantiles (native quantile forecasts)
-#
-# patch_len, context_len, horizon_len, model_dim, num_layers, num_heads, and the
-# quantile list are all read from config.json. `timesfm_weight_map()` is the one
-# place that translates checkpoint tensor names; `timesfm_module()` builds the
-# nn_module. Everything else (loader, batching, forecast object, parsnip) is
-# already wired, so the port is those two functions plus the attention block.
+# Native TimesFM 2.5 architecture entry point.
+
+timesfm_config_value <- function(config, name, default) {
+  value <- config[[name]] %||% default
+  if (length(value) != 1L || !is.numeric(value) || is.na(value) ||
+      !is.finite(value) || value <= 0 || value != floor(value)) {
+    tsfm_abort_checkpoint(
+      "TimesFM config field {.val {name}} must be one positive integer.",
+      model_id = config$model_id %||% NA_character_,
+      revision = config$revision %||% NA_character_,
+      tensor = "config.json",
+      expected = "one positive integer",
+      actual = value
+    )
+  }
+  as.integer(value)
+}
+
+validate_timesfm_config <- function(config) {
+  actual <- list(
+    hidden_size = timesfm_config_value(config, "hidden_size", 1280L),
+    intermediate_size = timesfm_config_value(config, "intermediate_size", 1280L),
+    head_dim = timesfm_config_value(config, "head_dim", 80L),
+    num_attention_heads = timesfm_config_value(config, "num_attention_heads", 16L),
+    num_hidden_layers = timesfm_config_value(config, "num_hidden_layers", 20L),
+    patch_length = timesfm_config_value(config, "patch_length", 32L),
+    horizon_length = timesfm_config_value(config, "horizon_length", 128L),
+    quantile_horizon_length = timesfm_config_value(
+      config, "quantile_horizon_length", 1024L
+    ),
+    context_length = timesfm_config_value(config, "context_length", 16384L)
+  )
+  expected <- list(
+    hidden_size = 1280L,
+    intermediate_size = 1280L,
+    head_dim = 80L,
+    num_attention_heads = 16L,
+    num_hidden_layers = 20L,
+    patch_length = 32L,
+    horizon_length = 128L,
+    quantile_horizon_length = 1024L,
+    context_length = 16384L
+  )
+  quantiles <- as.numeric(config$quantiles %||% seq(0.1, 0.9, by = 0.1))
+  wrong <- names(expected)[vapply(
+    names(expected),
+    function(name) !identical(actual[[name]], expected[[name]]),
+    logical(1)
+  )]
+  if (length(wrong) || !isTRUE(all.equal(quantiles, seq(0.1, 0.9, by = 0.1))) ||
+      !isTRUE(all.equal(as.numeric(config$rms_norm_eps %||% 1e-6), 1e-6))) {
+    tsfm_abort_checkpoint(
+      c(
+        "This TimesFM checkpoint variant is not compatible with the native port.",
+        "i" = "Only the pinned TimesFM 2.5 200M configuration is supported."
+      ),
+      model_id = config$model_id %||% NA_character_,
+      revision = config$revision %||% NA_character_,
+      tensor = "config.json",
+      expected = c(expected, list(quantiles = seq(0.1, 0.9, by = 0.1), rms_norm_eps = 1e-6)),
+      actual = c(actual, list(quantiles = quantiles, rms_norm_eps = config$rms_norm_eps %||% 1e-6))
+    )
+  }
+  invisible(config)
+}
 
 timesfm_capabilities <- function(config) {
+  # max_context is the best case: the checkpoint's 16,384 positions cover the
+  # context *and* the forecast, and every request consumes at least one complete
+  # 128-value output block. Longer horizons round up to further whole blocks, so
+  # the history actually used is `context_length - round_up(h, horizon_length)`
+  # --- see timesfm_usable_context(), which the forward pass applies per series.
+  # At the maximum horizon of 1,024 that leaves 15,360 observations.
+  context_limit <- as.integer(config$context_length %||% 16384L)
+  output_patch <- as.integer(config$horizon_length %||% 128L)
   new_tsfm_capabilities(
     architecture      = "timesfm",
-    max_context       = as.integer(
-      config$context_length %||% config$context_len %||% config$max_context %||% 2048L
-    ),
-    max_horizon       = as.integer(
-      config$quantile_horizon_length %||% config$quantile_horizon_len %||% 1024L
-    ),
+    max_context       = context_limit - output_patch,
+    max_horizon       = as.integer(config$quantile_horizon_length %||% 1024L),
     quantiles         = "native",
     quantile_levels   = as.numeric(config$quantiles %||% seq(0.1, 0.9, by = 0.1)),
     multivariate      = FALSE,
@@ -53,57 +89,96 @@ timesfm_capabilities <- function(config) {
   )
 }
 
-# Translate checkpoint tensor names -> module parameter paths. Filled during the
-# numerical port; isolated so the mapping lives in exactly one place.
+# Checkpoint and R module paths intentionally match. Keeping the map explicit
+# makes unsupported checkpoint variants diagnosable before tensor assignment.
 timesfm_weight_map <- function(config) {
-  tsfm_abort_checkpoint(c(
-    "The TimesFM weight map is not implemented yet.",
-    "i" = "It is derived from the checkpoint's {.file config.json} at port time."
-  ),
-  model_id = config$model_id %||% "google/timesfm-2.5-200m-pytorch",
-  revision = config$revision %||% NA_character_,
-  expected = "complete state-dict mapping",
-  actual = "scaffold")
+  expected <- timesfm_expected_state_spec(config)
+  stats::setNames(names(expected), names(expected))
 }
 
-# Build the R torch nn_module for TimesFM. Deferred to the numerical port; the
-# causal attention block is the main new operator surface versus TTM.
-timesfm_module <- function(config) {
-  tsfm_require_namespace("torch", reason = "It is needed to build the TimesFM network.")
-  tsfm_abort_checkpoint(
-    "The native TimesFM nn_module is not implemented yet.",
-    model_id = config$model_id %||% "google/timesfm-2.5-200m-pytorch",
-    revision = config$revision %||% NA_character_,
-    expected = "checkpoint-compatible nn_module",
-    actual = "scaffold"
-  )
+timesfm_load_module_weights <- function(module, weights, config) {
+  if (!is.list(weights) || is.null(names(weights))) {
+    tsfm_abort_checkpoint(
+      "TimesFM requires a complete named state dict.",
+      model_id = config$model_id %||% NA_character_,
+      revision = config$revision %||% NA_character_,
+      expected = names(timesfm_weight_map(config)),
+      actual = names(weights)
+    )
+  }
+  map <- timesfm_weight_map(config)
+  missing <- setdiff(names(map), names(weights))
+  unexpected <- setdiff(names(weights), names(map))
+  module_names <- names(module$state_dict())
+  if (length(missing) || length(unexpected) ||
+      !setequal(unname(map), module_names)) {
+    tsfm_abort_checkpoint(
+      "TimesFM checkpoint tensors do not map exactly onto the native module.",
+      model_id = config$model_id %||% NA_character_,
+      revision = config$revision %||% NA_character_,
+      expected = module_names,
+      actual = names(weights)
+    )
+  }
+  mapped <- weights[names(map)]
+  names(mapped) <- unname(map)
+  # The module is created with meta-device placeholders, so assignment adopts
+  # the safetensors storage rather than allocating and retaining a second copy.
+  module$load_state_dict(mapped, .refer_to_state_dict = TRUE)
+  invisible(module)
 }
 
 timesfm_constructor <- function(config, weights = NULL) {
+  tsfm_require_namespace("torch", reason = "It is needed for native TimesFM inference.")
+  validate_timesfm_config(config)
+  if (is.null(weights)) {
+    tsfm_abort_checkpoint(
+      "Native TimesFM construction requires checkpoint weights.",
+      model_id = config$model_id %||% NA_character_,
+      revision = config$revision %||% NA_character_,
+      expected = "a complete named state dict",
+      actual = NULL
+    )
+  }
+  module <- timesfm_module(config)
+  timesfm_load_module_weights(module, weights, config)
+  device <- config$device %||% "cpu"
+  module$to(device = torch::torch_device(device))
+  module$eval()
   caps <- timesfm_capabilities(config)
 
-  not_ready <- function(...) {
-    tsfm_abort_capability(c(
-      "The native TimesFM forward pass is not implemented yet.",
-      "i" = "Numerical parity against {.val google/timesfm-2.5-200m-pytorch} \\
-             requires golden fixtures generated with the Hub checkpoint, torch, \\
-             and reference {.pkg timesfm}.",
-      "i" = "Use {.code tsfm_pretrained(\"stub\")} to exercise the engine shell."
-    ),
-    model_id = config$model_id %||% "google/timesfm-2.5-200m-pytorch",
-    revision = config$revision %||% NA_character_,
-    capability = "model_state",
-    requested = "scaffold",
-    supported = "supported")
+  # Default to the handle's own device. Writing `device = device` here would be
+  # a recursive default argument reference: omitting the argument raises an
+  # opaque promise error instead of using the device the module was loaded onto.
+  predict_batch <- function(contexts, horizons, quantile_levels,
+                            device = config$device) {
+    if (!identical(as.character(device), as.character(config$device))) {
+      tsfm_abort_device(
+        c(
+          "Inference device {.val {device}} differs from the loaded TimesFM handle.",
+          "i" = "Load a separate handle with {.code tsfm_pretrained(..., device = {device})}."
+        ),
+        requested_device = device,
+        resolved_device = config$device
+      )
+    }
+    timesfm_predict_batch(
+      module, contexts, horizons, quantile_levels, config, device
+    )
+  }
+  predict_one <- function(context, h, quantile_levels) {
+    predict_batch(list(context), as.integer(h), quantile_levels, device)[[1]]
   }
 
   new_tsfm_model(
     architecture = "timesfm",
-    config       = config,
+    config = config,
     capabilities = caps,
-    predict_fn   = not_ready,
-    model_id     = config$model_id %||% NA_character_,
-    revision     = config$revision %||% NA_character_,
-    params       = weights
+    predict_fn = predict_one,
+    predict_batch_fn = predict_batch,
+    model_id = config$model_id %||% NA_character_,
+    revision = config$revision %||% NA_character_,
+    device = device,
+    params = module
   )
 }

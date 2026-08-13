@@ -106,6 +106,21 @@ tsfm_to_device <- function(x, device) {
   x$to(device = torch::torch_device(device))
 }
 
+# An explicit, testable interrupt boundary between units of work.
+#
+# This does not itself poll for an interrupt: R delivers pending interrupts at
+# its own evaluation-loop boundaries, which is what makes a long batched run
+# interruptible between chunks. A single torch call is not interruptible by
+# either mechanism. What this function guarantees is the boundary's *placement*
+# --- and the option hook lets tests drive a condition through it deterministically,
+# to prove interrupts are neither swallowed nor rewrapped as engine errors and
+# that no partial forecast escapes.
+tsfm_check_user_interrupt <- function() {
+  hook <- getOption("tsfm.interrupt_check", NULL)
+  if (is.function(hook)) hook()
+  invisible(NULL)
+}
+
 validate_batch_contexts <- function(contexts, model, call = rlang::caller_env()) {
   if (!is.list(contexts)) {
     tsfm_abort_capability(
@@ -267,12 +282,13 @@ tsfm_run_batches <- function(model, contexts, horizons, quantile_levels,
     )
   }
   batch_size <- as.integer(batch_size)
-  device <- tsfm_resolve_device(device)
+  device <- tsfm_resolve_device(device %||% model$device)
 
   if (is.function(model$predict_batch_fn)) {
     out <- vector("list", n)
     groups <- split(seq_len(n), (seq_len(n) - 1L) %/% batch_size)
     for (g in groups) {
+      tsfm_check_user_interrupt()
       res <- model$predict_batch_fn(contexts[g], horizons[g], quantile_levels,
                                     device = device)
       if (!is.list(res) || length(res) != length(g)) {
@@ -295,6 +311,7 @@ tsfm_run_batches <- function(model, contexts, horizons, quantile_levels,
     out
   } else {
     lapply(seq_len(n), function(i) {
+      tsfm_check_user_interrupt()
       validate_quantile_matrix(
         model$predict_fn(contexts[[i]], horizons[[i]], quantile_levels),
         horizons[[i]], quantile_levels, model

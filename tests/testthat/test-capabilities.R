@@ -56,3 +56,39 @@ test_that("explicit quantile levels and horizon are enforced", {
   expect_error(check_horizon(caps, 1025), class = "tsfm_error_capability")
   expect_silent(check_horizon(caps, 1024))
 })
+
+# seq(0.1, 0.9, by = 0.1) accumulates rounding error, so its 3rd and 7th values
+# are not the doubles a JSON config parses for 0.3 and 0.7. Both spellings name
+# the same trained levels, and the catalogue and config.json each use a
+# different one, so the engine must reconcile them rather than compare bits.
+test_that("the two spellings of the trained levels really do differ", {
+  literal <- jsonlite::fromJSON("[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]")
+  generated <- seq(0.1, 0.9, by = 0.1)
+  expect_false(identical(literal, generated))
+  expect_equal(literal, generated)
+  expect_identical(which(literal != generated), c(3L, 7L))
+})
+
+test_that("requested quantile levels are matched tolerantly and canonicalised", {
+  literal <- jsonlite::fromJSON("[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]")
+  caps <- new_tsfm_capabilities("timesfm", 16384L, quantile_levels = literal)
+
+  resolved <- check_quantile_levels(caps, seq(0.1, 0.9, by = 0.1))
+  # The checkpoint's own values come back, not the caller's spelling: an
+  # architecture selecting an output channel by position must not have to
+  # re-derive a match the engine already made.
+  expect_identical(resolved, literal)
+
+  expect_identical(tsfm_match_quantile_levels(seq(0.1, 0.9, by = 0.1), literal), 1:9)
+  expect_identical(tsfm_match_quantile_levels(c(0.05, 0.5), literal), c(NA_integer_, 5L))
+})
+
+test_that("levels collapsing onto one trained level are rejected", {
+  literal <- jsonlite::fromJSON("[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]")
+  caps <- new_tsfm_capabilities("timesfm", 16384L, quantile_levels = literal)
+  error <- expect_error(
+    check_quantile_levels(caps, c(0.3, 0.30000000000000004, 0.5)),
+    class = "tsfm_error_quantile_levels"
+  )
+  expect_s3_class(error, "tsfm_error_recoverable")
+})

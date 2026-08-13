@@ -1,0 +1,261 @@
+---
+title: "Zero-shot forecasting with TimesFM 2.5"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Zero-shot forecasting with TimesFM 2.5}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", eval = FALSE)
+```
+
+TimesFM 2.5 is the first architecture `tsfm` runs natively: the checkpoint is
+loaded into R `torch`, and no Python runs at inference time. This vignette walks
+the whole public surface on one panel, from discovery to forecast.
+
+Chunks are not evaluated when the vignette is built — that would download a
+925 MB checkpoint during `R CMD check` — but every output below was produced by
+running the code as written.
+
+## Find a checkpoint before downloading anything
+
+`tsfm_models()` is offline and static. It never fetches a config or a weight
+file, so you can inspect what is available, how large it is, and what licence
+its weights carry before committing to a download:
+
+```{r}
+library(tsfm)
+
+tsfm_models()
+#>                          model_id architecture     state max_context  n_params
+#> 1 google/timesfm-2.5-200m-pytorch      timesfm supported       16256 231289280
+#>   size_bytes cached    license
+#> 1  925181104   TRUE Apache-2.0
+```
+
+The default lists only checkpoints that have passed both release gates —
+architecture conformance and numerical parity against the pinned reference. The
+`license` column is the **weight** licence, not the package's.
+
+`cached` is computed with local-only probes, so it tells you whether a download
+is pending without touching the network. To fetch the files explicitly:
+
+```{r}
+tsfm_download("google/timesfm-2.5-200m-pytorch")
+```
+
+## Load the model and check what it can do
+
+```{r}
+model <- tsfm_pretrained("google/timesfm-2.5-200m-pytorch", device = "cpu")
+
+tsfm_capabilities(model)
+#> <tsfm_capabilities>
+#>   architecture:      timesfm
+#>   max_context:       16256        max_horizon: 1024
+#>   quantiles:         native        levels: 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9
+#>   multivariate:      FALSE        samples:   FALSE
+#>   past_covariates:   FALSE        future_covariates: FALSE
+#>   static_covariates: FALSE        fine_tunable: FALSE
+#>   license:           Apache-2.0
+```
+
+Capabilities are enforced *before* inference, so an unsupported request costs
+nothing. The `FALSE` fields are honest: contract v1 has no channel for
+covariates or multivariate targets, so `tsfm` refuses rather than silently
+ignoring them.
+
+`max_context` is the best case. TimesFM's 16,384 positions cover the context and
+the forecast together, so the history actually used is
+`16384 - ceiling(h / 128) * 128` — 16,256 observations at short horizons, 15,360
+at the maximum horizon of 1,024. Longer histories are truncated to the most
+recent values, per series.
+
+## Forecast a panel
+
+Any data frame with an index, a key, and a numeric target will do; a `tsibble`
+works too, with the index and key inferred.
+
+```{r}
+set.seed(20260813L)
+n <- 120L
+panel <- do.call(rbind, lapply(c("north", "south"), function(k) {
+  data.frame(
+    date   = as.Date("2024-01-01") + seq_len(n) - 1L,
+    sales  = 120 + seq_len(n) * 0.25 +
+             10 * sin(seq_len(n) * 2 * pi / 7) + rnorm(n, sd = 2),
+    region = k
+  )
+}))
+
+fc <- forecast(
+  model, panel,
+  h = 14,
+  index = "date", key = "region", target = "sales",
+  quantile_levels = c(0.1, 0.5, 0.9)
+)
+fc
+#> <tsfm_forecast> of "sales"
+#> 2 series x horizon, quantile levels 0.1, 0.5, and 0.9
+#>    region       date    .mean .distribution
+#> 1   north 2024-04-30 162.6610   quantile[3]
+#> 2   north 2024-05-01 155.9382   quantile[3]
+#> 3   north 2024-05-02 146.4727   quantile[3]
+#> 4   north 2024-05-03 142.3131   quantile[3]
+#> 5   north 2024-05-04 144.9197   quantile[3]
+```
+
+Both series are forecast in **one batched call**. `.mean` is the engine's
+exactly evaluated median, and `.distribution` is a `distributional` vector
+carrying the requested quantiles.
+
+`as.data.frame()` gives a plain frame with no attributes attached:
+
+```{r}
+head(as.data.frame(fc), 3)
+#>   region       date    .mean .distribution
+#> 1  north 2024-04-30 162.6610   quantile[3]
+#> 2  north 2024-05-01 155.9382   quantile[3]
+#> 3  north 2024-05-02 146.4727   quantile[3]
+```
+
+Requesting a quantile the checkpoint was not trained on fails before any tensor
+work, with a classed condition rather than a message you have to parse:
+
+```{r}
+forecast(model, panel, h = 14, index = "date", key = "region",
+         target = "sales", quantile_levels = c(0.05, 0.5))
+#> Error in `forecast()`:
+#> ! The checkpoint does not emit every requested quantile level.
+#> ✖ Unsupported: 0.05.
+#> ℹ Supported levels: 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, and 0.9.
+```
+
+The condition carries the leaf class `tsfm_error_quantile_levels` and the policy
+parent `tsfm_error_recoverable`, so a caller can branch on the outcome without
+matching message text.
+
+## Into the tidyverts
+
+`fabletools::as_fable()` converts the batched forecast into a fable, so it flows
+into `accuracy()`, reconciliation, and the tidyverts plotting stack:
+
+```{r}
+fabletools::as_fable(fc)
+#> # A fable: 28 x 4 [1D]
+#> # Key:     region [2]
+#>    region date       .mean       sales
+#>    <chr>  <date>     <dbl>      <dist>
+#>  1 north  2024-04-30  163. quantile[3]
+#>  2 north  2024-05-01  156. quantile[3]
+#>  3 north  2024-05-02  146. quantile[3]
+#> # ℹ 25 more rows
+```
+
+## Composing with `TSFM()`
+
+To compare a foundation model against ARIMA or ETS in one mable, use `TSFM()`
+inside `fabletools::model()`:
+
+```{r}
+library(tsibble)
+
+fits <- fabletools::model(
+  as_tsibble(panel, key = region, index = date),
+  timesfm = TSFM(sales, model_id = "google/timesfm-2.5-200m-pytorch",
+                 device = "cpu")
+)
+fits
+#> # A mable: 2 x 2
+#> # Key:     region [2]
+#>   region         timesfm
+#>   <chr>          <model>
+#> 1 north  <TSFM[timesfm]>
+#> 2 south  <TSFM[timesfm]>
+
+fabletools::forecast(fits, h = 14)
+#> # A fable: 28 x 5 [1D]
+#> # Key:     region, .model [2]
+#>    region .model  date             sales .mean
+#>    <chr>  <chr>   <date>          <dist> <dbl>
+#>  1 north  timesfm 2024-04-30 quantile[3]  163.
+#>  2 north  timesfm 2024-05-01 quantile[3]  156.
+#>  3 north  timesfm 2024-05-02 quantile[3]  147.
+#> # ℹ 25 more rows
+```
+
+Two things are worth knowing about this route.
+
+**It is per key, not batched.** `fabletools` trains and forecasts one series at
+a time, so the engine sees a batch of one per key. The checkpoint is loaded once
+and served from the resident cache for every remaining key, but the forward
+passes are not batched. For a wide panel, prefer
+`forecast(model, panel, h) |> fabletools::as_fable()`.
+
+**`.mean` is the distribution's mean here**, because `fabletools` derives it
+from the distribution. The plain-R and `as_fable()` routes report the engine's
+exact median instead. The distributions are identical; only the summary differs.
+`median()` recovers the engine's point forecast on any route:
+
+```{r}
+median(fabletools::forecast(fits, h = 14)$sales)
+```
+
+## Into tidymodels
+
+```{r}
+library(parsnip)
+
+spec <- tsfm_reg() |>
+  set_engine("tsfm",
+             model_id = "google/timesfm-2.5-200m-pytorch",
+             device = "cpu", index = "date", id = "region")
+
+fitted <- fit(spec, sales ~ 1, data = panel)
+future <- expand.grid(
+  date   = max(panel$date) + 1:14,
+  region = c("north", "south")
+)
+predict(fitted, new_data = future)
+```
+
+`predict()` returns a tidymodels-conformant frame, row-aligned to `new_data`,
+with `.pred`, `.pred_lower`, `.pred_upper`, and one `.pred_qXX` column per
+fitted quantile level.
+
+## Managing the checkpoint
+
+A constructed handle is held in a bounded, session-level cache — by default one
+model, controlled by `options(tsfm.max_loaded_models)`. That is what keeps a
+`tune_grid()` or a per-key `TSFM()` run from reloading 925 MB repeatedly.
+
+```{r}
+tsfm_cache_status()
+#>                                model_id                                 revision
+#> 1       google/timesfm-2.5-200m-pytorch 1d952420fba87f3c6dee4f240de0f1a0fbc790e3
+#> 2 ibm-granite/granite-timeseries-ttm-r2 d6a79570cac0f33d526601cd3a0fc7c80a8f9a2f
+#>   device disk_cached resident size_bytes           last_used
+#> 1    cpu        TRUE     TRUE  925181104 2026-08-13 21:20:04
+#> 2   <NA>       FALSE    FALSE    3240592                <NA>
+```
+
+`disk_cached` and `resident` are deliberately separate: the first is about
+`hfhub`'s files on disk, the second about a constructed module in this session.
+`tsfm_unload()` releases resident handles and never deletes downloaded files —
+disk lifetime stays with `hfhub`.
+
+```{r}
+tsfm_unload()
+```
+
+## Reproducibility
+
+Support claims are pinned to immutable revisions. The catalogue resolves
+checkpoint `1d952420fba87f3c6dee4f240de0f1a0fbc790e3`, never a moving `main`,
+and `tsfm_pretrained()` rejects any other revision for a curated model. The
+committed parity fixtures were generated from official source commit
+`3dae50b20d7a724981e8ea36cda75578f80dd2dc`; see
+`tests/testthat/fixtures/README.md` for the generator, the tolerance, and how to
+regenerate them.

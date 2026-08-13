@@ -28,18 +28,26 @@ test_that("TimesFM golden fixtures cover the Stage 2 reference cases", {
       "1d952420fba87f3c6dee4f240de0f1a0fbc790e3"
     )
     expect_equal(fixture$quantile_levels, seq(0.1, 0.9, by = 0.1))
+    expect_length(fixture$context_files, nrow(fixture$context_specs))
+    expect_true(all(file.exists(testthat::test_path(
+      "fixtures", "timesfm", unlist(fixture$context_files)
+    ))))
     n_contexts <- nrow(fixture$context_specs)
     expect_identical(dim(fixture$expected_point)[[1]], n_contexts)
     expect_identical(dim(fixture$expected_point)[[2]], fixture$horizon)
     expect_identical(dim(fixture$expected_quantiles), c(
       n_contexts, fixture$horizon, 9L
     ))
+    # Each fixture records the comparison budget it was generated against, as
+    # an atol/rtol pair rather than one absolute number.
+    expect_equal(fixture$atol, 1e-4)
+    expect_equal(fixture$rtol, 1e-5)
     median <- fixture$expected_quantiles[, , 5]
     if (n_contexts == 1L) median <- matrix(median, nrow = 1L)
-    expect_equal(
+    expect_close_f32(
       median,
       fixture$expected_point,
-      tolerance = fixture$tolerance
+      atol = fixture$atol, rtol = fixture$rtol
     )
   }
   expect_identical(fixtures$short_context$context_specs$values[[1]], c(3, 4.5, 4))

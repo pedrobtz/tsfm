@@ -1,7 +1,7 @@
 # tsfm 0.0.0.9000
 
-Development release establishing the model-loading and forecasting shell. No
-real foundation model is supported yet.
+Development release establishing native TimesFM inference and the surrounding
+model-loading and forecasting shell.
 
 ## Engine contract
 
@@ -15,7 +15,9 @@ real foundation model is supported yet.
   construction, forecast shape, quantile monotonicity, finiteness, context
   limits, empty-context handling, and batch/loop agreement. Built-in
   architectures run it in the test suite; third parties get the same check
-  without reading the engine's internals.
+  without reading the engine's internals. A `max_context` check the probe is too
+  short to reach now reports not-applicable instead of passing, so the summary
+  never counts an invariant that did not run.
 * `forecast()` is now re-exported from `generics` rather than defined locally,
   and `as_fable()` is registered onto `fabletools`'s generic from `.onLoad()`
   instead of shadowing it. Attaching `tsfm` alongside fabletools, modeltime, or
@@ -52,9 +54,9 @@ real foundation model is supported yet.
 * The batch boundary validates contexts, horizons, quantile levels, batch size,
   and architecture return shape/finiteness/monotonicity before assembling a
   forecast.
-* `tsfm_pretrained()` loads the self-contained `stub` fixture and provides the
-  Hub-resolution shell for future supported checkpoints through an open
-  architecture registry (`tsfm_register_arch()`).
+* `tsfm_pretrained()` loads the self-contained `stub` fixture and pinned native
+  TimesFM checkpoints through an open architecture registry
+  (`tsfm_register_arch()`).
 * `tsfm_capabilities()` reports per-model capability metadata, with pre-flight
   validation that rejects unsupported requests before inference.
 * `forecast()` forecasts a `tsibble` or data-frame panel with no optional
@@ -62,6 +64,17 @@ real foundation model is supported yet.
   tidymodels-conformant interface when `hardhat` is installed.
 * `tsfm_forecast` objects are backed by `distributional`, with a
   `fabletools::as_fable()` method and tidy prediction adapters.
+* Added `TSFM()`, a `fabletools` model definition, so a checkpoint composes
+  inside `fabletools::model()` next to any other tidyverts model. It evaluates
+  one key at a time and reuses the resident handle across keys;
+  `forecast(model, panel, h) |> fabletools::as_fable()` remains the batched
+  route. `fabletools` derives `.mean` from the distribution, so a `TSFM()` fable
+  reports the distribution's mean where the other routes report the engine's
+  exact median; the distributions themselves are identical, and `median()`
+  recovers the point forecast on any route.
+* `fabletools::as_fable()` no longer drops `.mean`. It does not synthesise the
+  column the way `fabletools::forecast()` does, so the converted fable
+  previously had a silently `NULL` point forecast.
 * Batched panel inference (`tsfm_run_batches()`) with device resolution and
   validation across CPU/CUDA/MPS (`tsfm_resolve_device()`, `tsfm_set_device()`).
 
@@ -71,8 +84,44 @@ real foundation model is supported yet.
   bridge exercised end to end against the stub.
 * `context_length()` is a `dials` parameter and now actually bounds the history
   retained by the fitted engine.
+* `tsfm_reg()` and `context_length()` check for `parsnip` and `dials` up front,
+  so a core installation gets the same typed `tsfm_error_capability` as every
+  other optional-dependency path instead of a bare "no package called" error.
 
 ## Models
+
+* **TimesFM 2.5** is the first supported native model. The R `torch` port owns
+  patch tokenization, cumulative reversible normalization, 20 causal rotary
+  transformer layers, cached autoregressive decoding, the continuous quantile
+  head, flip invariance, positivity inference, and quantile-crossing repair.
+* The complete 232-tensor safetensors state dict maps directly onto meta-device
+  module placeholders, avoiding a retained second CPU copy during construction.
+  Modules run in evaluation mode under disabled gradients.
+* Single-series and vectorized batch inference pass every pinned CPU golden
+  fixture, including exact short-context, 16,256-value truncation, and
+  batch/loop cases. Repeated calls are identical and silent.
+* Numerical comparisons use `|actual - expected| <= atol + rtol * |expected|`,
+  the criterion `torch.testing.assert_close()` and the upstream TimesFM tests
+  use, instead of a single absolute threshold that is simultaneously too tight
+  for large values and too loose for small ones. Block-level checks use
+  PyTorch's float32 defaults (`atol = 1e-5, rtol = 1.3e-6`); model fixtures
+  record `atol = 1e-4, rtol = 1e-5`.
+* Inference places explicit interrupt boundaries between engine batches and
+  autoregressive blocks, where R delivers a pending interrupt; interrupt
+  conditions propagate without being rewrapped and without returning a partial
+  result. A single `torch` call remains uninterruptible.
+* Requested quantile levels are reconciled to the checkpoint's trained levels at
+  the engine boundary and handed to the architecture in the checkpoint's own
+  spelling. `seq(0.1, 0.9, by = 0.1)` and the literals parsed from `config.json`
+  differ at `0.3` and `0.7`; previously, requesting the levels advertised by
+  `tsfm_models()` produced `NA` forecasts that surfaced as an internal contract
+  error. An unsupported level is now a `tsfm_error_quantile_levels` refusal
+  raised before any tensor work.
+* TimesFM truncates context per series using that series' own horizon, so a
+  forecast no longer depends on which other series share its batch or on
+  `options(tsfm.batch_size)`. The usable history is
+  `context_length - ceiling(h / 128) * 128`; `max_context` reports the h ≤ 128
+  best case, and the README tabulates the rest.
 
 * Added four compact, committed TimesFM reference fixtures from the pinned
   official implementation: typical, short-context, context-truncation, and
@@ -80,16 +129,18 @@ real foundation model is supported yet.
   flag and upstream dependency pin.
 * Captured and validated the exact pinned TimesFM state layout: 232 float32
   tensors and 231,289,280 parameters. The full 925,181,104-byte checkpoint
-  loads into a named R state dict; native module construction remains Stage 3.
+  loads into a named R state dict and native module.
 * The native TimesFM feasibility gate passed: a reduced R `torch` transformer
   block and continuous quantile head match the pinned official PyTorch output
-  below `1e-6`; the exact-width CPU spike executes successfully. This does not
+  below `1e-5` — a threshold set by float32 accumulation across LibTorch builds,
+  not by the port; the exact-width CPU spike executes successfully. This does not
   yet constitute checkpoint support.
-* **Stub** is the only executable built-in and is explicitly a random-walk test
-  fixture, not a foundation model.
-* **TimesFM 2.5** is the `0.1.0` release-model scaffold; it is not supported
-  until conformance and numerical-parity gates pass.
+* **Stub** remains an executable random-walk test fixture, not a foundation
+  model.
 * **TTM** remains a registered scaffold deferred until the engine represents
   point-only output.
 * **Chronos-2** is no longer registered or advertised as available. Its
-  unverified Brulee adapter remains reference work only.
+  unverified Brulee adapter is kept as prior art under `.agents/reference/`
+  rather than shipped in `R/`, and `brulee` has left `Suggests`: the package no
+  longer declares a dependency for code nothing calls. `tsfm_pretrained()` still
+  rejects Chronos-2 ids before any network or tensor work.

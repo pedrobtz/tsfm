@@ -33,12 +33,13 @@ test_that("native TTM matches the reference implementation on golden fixtures", 
     q <- model$predict_fn(context, h, levels)
     median_col <- match(0.5, levels)
 
-    expect_equal(q[, median_col], as.numeric(fx$expected_median),
-                 tolerance = fx$tolerance %||% 1e-4)
+    expect_close_f32(q[, median_col], as.numeric(fx$expected_median),
+                     atol = fx$atol %||% 1e-4, rtol = fx$rtol %||% 1e-5)
     if (!is.null(fx$expected_quantiles)) {
       expected <- matrix(as.numeric(unlist(fx$expected_quantiles)),
                          nrow = h, ncol = length(levels), byrow = TRUE)
-      expect_equal(unname(q), expected, tolerance = fx$tolerance %||% 1e-4)
+      expect_close_f32(unname(q), expected,
+                       atol = fx$atol %||% 1e-4, rtol = fx$rtol %||% 1e-5)
     }
   }
 })

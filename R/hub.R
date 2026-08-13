@@ -203,10 +203,7 @@ tsfm_resolve_config <- function(model_id, revision, paths = NULL, record = NULL,
   list(config = config, weights = weights, paths = paths)
 }
 
-# Read a JSON config without taking a hard dependency: hfhub pulls in jsonlite,
-# but resolve it at call time to keep this decoupled.
 jsonlite_read <- function(path) {
-  tsfm_require_namespace("jsonlite", reason = "It is needed to parse checkpoint configs.")
   jsonlite::fromJSON(path, simplifyVector = TRUE)
 }
 

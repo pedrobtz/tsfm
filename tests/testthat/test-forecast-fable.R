@@ -41,3 +41,24 @@ test_that("forecast() |> as_fable() |> accuracy() works on the stub", {
   acc <- fabletools::accuracy(fbl, tsb_full)
   expect_true(all(is.finite(acc$RMSE)))
 })
+
+test_that("the converted fable keeps the engine's point forecast", {
+  skip_if_not_installed("fabletools")
+  skip_if_not_installed("tsibble")
+  panel <- data.frame(
+    t = 1:24,
+    v = as.numeric(100 + cumsum(sin(1:24))),
+    store = "a",
+    stringsAsFactors = FALSE
+  )
+  model <- tsfm_pretrained("stub")
+  fc <- forecast(model, tsibble::as_tsibble(panel, key = store, index = t),
+                 h = 6, quantile_levels = c(0.1, 0.5, 0.9))
+  fbl <- fabletools::as_fable(fc)
+
+  # as_fable() does not synthesise `.mean` the way fabletools::forecast() does,
+  # so the column has to survive the conversion rather than be dropped.
+  expect_true(".mean" %in% names(fbl))
+  expect_equal(as.numeric(fbl$.mean), as.numeric(fc$.mean))
+  expect_equal(as.numeric(stats::median(fbl$v)), as.numeric(fc$.mean))
+})

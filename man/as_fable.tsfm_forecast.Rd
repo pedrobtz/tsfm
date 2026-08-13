@@ -15,7 +15,7 @@ as_fable.tsfm_forecast(x, ...)
 A \code{fable} object.
 }
 \description{
-A method for \code{\link[fabletools:as-fable]{fabletools::as_fable()}}, so a \code{tsfm_forecast} flows into
+A method for \code{\link[fabletools:as_fable]{fabletools::as_fable()}}, so a \code{tsfm_forecast} flows into
 \code{fabletools::accuracy()}, reconciliation, and the tidyverts plotting stack.
 }
 \details{

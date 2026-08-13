@@ -12,8 +12,11 @@ knitr::opts_chunk$set(collapse = TRUE, comment = "#>", eval = FALSE)
 ```
 
 This vignette exercises the engine and adapter surfaces with `stub`, a
-weight-free random-walk fixture. It is not a foundation model. No real model is
-called supported until it passes contract conformance and numerical parity.
+weight-free random-walk fixture. It is not a foundation model — it exists so the
+engine and its adapters can be demonstrated and tested without a download.
+
+For the same workflow driven by a real checkpoint, see
+`vignette("timesfm-zero-shot")`.
 
 ## Load a model
 

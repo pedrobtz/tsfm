@@ -70,6 +70,10 @@
       ]
     }
   ],
+  "context_files": [
+    "batch_agreement-context-1.f32",
+    "batch_agreement-context-2.f32"
+  ],
   "max_context": 64,
   "horizon": 6,
   "quantile_levels": [
@@ -239,6 +243,7 @@
       ]
     ]
   ],
-  "tolerance": 0.0001,
+  "atol": 0.0001,
+  "rtol": 1e-05,
   "batch_loop_max_abs_difference": 1.52587890625e-05
 }

@@ -217,18 +217,30 @@ tsfm_check_architecture <- function(constructor,
     }
   })
 
-  checks$context_limit <- run_check("respects its declared max_context", function() {
-    over <- c(rep(probe[1], 8L), probe)
-    if (length(over) <= max_context) {
-      return(NULL)  # cannot exercise the limit with this probe
-    }
-    out <- model$predict_fn(utils::tail(over, max_context), h, quantile_levels)
-    if (!is.matrix(out) || !identical(dim(out), c(h, q))) {
-      "A context at exactly max_context did not produce a valid forecast."
-    } else {
-      NULL
-    }
-  })
+  # A probe shorter than max_context cannot reach the limit. Report that as
+  # not-applicable: silently passing an unexercised check would overstate what
+  # the harness verified, and for a long-context model the default probe never
+  # comes close.
+  over <- c(rep(probe[1], 8L), probe)
+  checks$context_limit <- if (length(over) <= max_context) {
+    new_check_result(
+      "respects its declared max_context", NA,
+      sprintf(
+        paste0("Not exercised: the probe context (%d values) is shorter than ",
+               "max_context (%d). Pass a longer `context` to check the limit."),
+        length(over), max_context
+      )
+    )
+  } else {
+    run_check("respects its declared max_context", function() {
+      out <- model$predict_fn(utils::tail(over, max_context), h, quantile_levels)
+      if (!is.matrix(out) || !identical(dim(out), c(h, q))) {
+        "A context at exactly max_context did not produce a valid forecast."
+      } else {
+        NULL
+      }
+    })
+  }
 
   # --- batch path ----------------------------------------------------------
   if (is.function(model$predict_batch_fn)) {
@@ -236,7 +248,7 @@ tsfm_check_architecture <- function(constructor,
       if (!isTRUE(checks$shape$ok)) {
         return("Cannot compare: the predict_fn probe did not produce a valid forecast.")
       }
-      device <- tsfm_resolve_device()
+      device <- tsfm_resolve_device(model$device %||% NULL)
       batched <- model$predict_batch_fn(list(probe, probe), c(h, h),
                                         quantile_levels, device = device)
       if (!is.list(batched) || length(batched) != 2L) {
