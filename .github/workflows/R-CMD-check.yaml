@@ -19,10 +19,14 @@ jobs:
       fail-fast: false
       matrix:
         config:
+          # `torch: true` installs the LibTorch runtime so the native model
+          # tests actually execute. The other jobs deliberately run without it:
+          # CRAN's machines will not have LibTorch either, so those jobs are the
+          # standing proof that the suite skips cleanly instead of erroring.
           - {os: macos-latest,   r: 'release'}
           - {os: windows-latest, r: 'release'}
           - {os: ubuntu-latest,   r: 'devel', http-user-agent: 'release'}
-          - {os: ubuntu-latest,   r: 'release'}
+          - {os: ubuntu-latest,   r: 'release', torch: true}
           - {os: ubuntu-latest,   r: 'oldrel-1'}
 
     env:
@@ -43,6 +47,16 @@ jobs:
         with:
           extra-packages: any::rcmdcheck
           needs: check
+
+      # LibTorch and LibLantern ship separately from the torch R package and are
+      # not installed by setup-r-dependencies. Without this step every test that
+      # touches a tensor skips, so the native port would be untested on CI.
+      # Explicit rather than TORCH_INSTALL=1 so the download is a named step
+      # whose failure is visible instead of surfacing later as a load error.
+      - name: Install the LibTorch runtime
+        if: matrix.config.torch
+        run: Rscript -e 'torch::install_torch()'
+        shell: bash
 
       - uses: r-lib/actions/check-r-package@v2
         with:

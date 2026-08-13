@@ -8,8 +8,7 @@
 
 skip_unless_checkpoint <- function() {
   skip_if_not(identical(Sys.getenv("TSFM_RUN_CHECKPOINT_TEST"), "true"))
-  skip_if_not_installed("torch")
-  skip_if_not(torch::torch_is_installed(), "LibTorch is not installed")
+  skip_if_no_torch()
   record <- tsfm_catalogue_get("google/timesfm-2.5-200m-pytorch")
   skip_if_not(identical(record$state, "supported"), "TimesFM is not supported.")
   invisible(record)

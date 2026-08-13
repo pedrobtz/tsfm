@@ -149,7 +149,7 @@ test_that("unload filters resident handles and never changes disk state", {
 })
 
 test_that("explicit prefetch downloads the manifest without construction", {
-  skip_if_not_installed("torch")
+  skip_if_no_torch()
   config_path <- tempfile(fileext = ".json")
   writeLines('{"model_type":"fixture"}', config_path)
   weight_path <- tempfile(fileext = ".safetensors")

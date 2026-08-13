@@ -11,7 +11,7 @@ test_that("the pinned TimesFM state layout captures all names and parameters", {
 })
 
 test_that("the native module has a complete identity weight map", {
-  skip_if_not_installed("torch")
+  skip_if_no_torch()
   config <- timesfm_test_config()
   module <- timesfm_module(config)
   map <- timesfm_weight_map(config)
@@ -41,7 +41,7 @@ test_that("TimesFM header validation is exact and classed", {
 })
 
 test_that("a safetensors file loads to a complete named R torch state dict", {
-  skip_if_not_installed("torch")
+  skip_if_no_torch()
   path <- tempfile(fileext = ".safetensors")
   safetensors::safe_save_file(
     list(
@@ -76,7 +76,7 @@ test_that("missing and corrupt safetensors files are actionable checkpoint error
 
 test_that("the real pinned checkpoint can load locally when explicitly enabled", {
   skip_if_not(identical(Sys.getenv("TSFM_RUN_CHECKPOINT_TEST"), "true"))
-  skip_if_not_installed("torch")
+  skip_if_no_torch()
   record <- tsfm_catalogue_get("google/timesfm-2.5-200m-pytorch")
   paths <- vapply(record$manifest, function(file) {
     hfhub::hub_download(

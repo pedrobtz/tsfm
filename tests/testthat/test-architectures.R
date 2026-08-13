@@ -84,8 +84,7 @@ test_that("usable context shrinks as the horizon claims output blocks", {
 })
 
 test_that("context truncation is per series, not per batch", {
-  skip_if_not_installed("torch")
-  skip_if_not(torch::torch_is_installed(), "LibTorch is not installed")
+  skip_if_no_torch()
   config <- timesfm_test_config()
 
   # A long series forecast at h = 6 keeps 16,000 observations. Batching it

@@ -1,6 +1,5 @@
 test_that("TimesFM spike matches the pinned official transformer block", {
-  skip_if_not_installed("torch")
-  skip_if_not(torch::torch_is_installed(), "LibTorch is not installed")
+  skip_if_no_torch()
 
   module <- timesfm_spike_module()
   timesfm_spike_fill_reference_weights(module)
@@ -46,8 +45,7 @@ test_that("TimesFM spike matches the pinned official transformer block", {
 })
 
 test_that("fused QKV loading preserves the upstream out-by-in layout", {
-  skip_if_not_installed("torch")
-  skip_if_not(torch::torch_is_installed(), "LibTorch is not installed")
+  skip_if_no_torch()
 
   module <- timesfm_spike_module()
   weight <- timesfm_spike_tensor(c(12, 4), 42)
