@@ -269,7 +269,7 @@ a public benchmark dataset like this one.</p>
 <span><span class="fu"><a href="https://rdrr.io/r/stats/quantile.html" class="external-link">quantile</a></span><span class="op">(</span><span class="va">tf</span><span class="op">$</span><span class="va">Demand</span>, <span class="fl">0.5</span><span class="op">)</span>   <span class="co">#&gt; 230.4 214.8 194.0 ...</span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/stats/quantile.html" class="external-link">quantile</a></span><span class="op">(</span><span class="va">tf</span><span class="op">$</span><span class="va">Demand</span>, <span class="fl">0.9</span><span class="op">)</span>   <span class="co">#&gt; 240.9 225.5 204.9 ...</span></span>
 <span></span>
-<span><span class="fu"><a href="https://rdrr.io/pkg/distributional/man/hilo.html" class="external-link">hilo</a></span><span class="op">(</span><span class="va">tf</span>, <span class="fl">60</span><span class="op">)</span></span>
+<span><span class="fu"><a href="https://pkg.mitchelloharawild.com/distributional/reference/hilo.html" class="external-link">hilo</a></span><span class="op">(</span><span class="va">tf</span>, <span class="fl">60</span><span class="op">)</span></span>
 <span><span class="co">#&gt; # A tsibble: 3 x 5 [1D]</span></span>
 <span><span class="co">#&gt;   .model  Date            Demand .mean                  `60%`</span></span>
 <span><span class="co">#&gt;   &lt;chr&gt;   &lt;date&gt;          &lt;dist&gt; &lt;dbl&gt;                 &lt;hilo&gt;</span></span>
@@ -277,7 +277,7 @@ a public benchmark dataset like this one.</p>
 <span><span class="co">#&gt; 2 timesfm 2014-12-05 quantile[3]  215. [208.6656, 222.8651]60</span></span>
 <span><span class="co">#&gt; 3 timesfm 2014-12-06 quantile[3]  195. [188.6090, 202.1633]60</span></span></code></pre></div>
 <p><code>hilo(tf, 80)</code> is the one to watch out for: it returns an
-<code>NA</code> lower bound. <code><a href="https://rdrr.io/pkg/distributional/man/hilo.html" class="external-link">hilo()</a></code> computes
+<code>NA</code> lower bound. <code><a href="https://pkg.mitchelloharawild.com/distributional/reference/hilo.html" class="external-link">hilo()</a></code> computes
 <code>(1 - 80/100)/2</code>, which in floating point is
 <code>0.09999999999999998</code> — about two ulps <em>below</em>
 <code>0.1</code>. TimesFM’s lowest trained quantile is exactly
