@@ -242,21 +242,26 @@ tsfm_register_harus_backend <- function() {
 
   for (i in seq_len(nrow(models))) {
     model_id <- models$model_id[i]
-    harus::harus_register_model(
-      name = model_id,
-      generator = function(response, model_id = model_id, ...) {
-        TSFM(!!response, model_id = model_id, ...)
-      },
-      backend = "tsfm",
-      capabilities = harus::harus_capabilities(
-        min_length = 1L,
-        max_horizon = Inf,
-        requires = "tsfm",
-        probabilistic = TRUE,
-        cost = "medium"
-      ),
-      overwrite = TRUE
-    )
+    # Use local() to create a new environment for each iteration,
+    # avoiding promise evaluation issues with the closure
+    local({
+      mid <- model_id
+      harus::harus_register_model(
+        name = mid,
+        generator = function(response, ...) {
+          TSFM(!!response, model_id = mid, ...)
+        },
+        backend = "tsfm",
+        capabilities = harus::harus_capabilities(
+          min_length = 1L,
+          max_horizon = Inf,
+          requires = "tsfm",
+          probabilistic = TRUE,
+          cost = "medium"
+        ),
+        overwrite = TRUE
+      )
+    })
   }
   invisible(models$model_id)
 }
