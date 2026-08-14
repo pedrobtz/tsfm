@@ -97,8 +97,11 @@ test_that("the batch path equals the loop path", {
   })
   # The contract says the batch path is an optimisation, never a different
   # model. Padding differs between the two calls, so this also proves the mask
-  # keeps padded positions out of the result.
-  expect_equal(batched, looped)
+  # keeps padded positions out of the result. Compared within the float32 budget
+  # rather than bit-exactly: the batch dimension alone changes reduction shapes.
+  for (i in seq_along(contexts)) {
+    expect_close_f32(batched[[i]], looped[[i]])
+  }
 })
 
 test_that("a series is unaffected by the horizons of its batch neighbours", {
@@ -115,7 +118,10 @@ test_that("a series is unaffected by the horizons of its batch neighbours", {
   together <- timesfm_predict_batch(
     module, list(long, short), c(4L, 20L), levels, config, "cpu"
   )[[1]]
-  expect_equal(together, alone)
+  # Within the float32 budget, not bit-exactly. Sharing the batch's longest
+  # horizon would truncate this series from 50 observations to 40 and move the
+  # forecast far beyond any rounding difference.
+  expect_close_f32(together, alone)
 })
 
 test_that("multi-block horizons decode autoregressively and stay well formed", {

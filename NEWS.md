@@ -72,6 +72,13 @@ model-loading and forecasting shell.
   reports the distribution's mean where the other routes report the engine's
   exact median; the distributions themselves are identical, and `median()`
   recovers the point forecast on any route.
+* Added `vignette("electricity-demand")`, a worked comparison on Victorian daily
+  electricity demand from the Monash archive: `TSFM()` in one mable beside
+  `SNAIVE()`, `ETS()`, and `ARIMA()`, scored on 28 held-out days with
+  `fabletools::accuracy()`. Zero-shot TimesFM reaches MASE 0.47 against 1.20 for
+  the fitted ARIMA. The vignette cites the benchmark literature on both sides,
+  including where foundation models lose to statistical baselines, and is
+  explicit that one window is one observation.
 * `fabletools::as_fable()` no longer drops `.mean`. It does not synthesise the
   column the way `fabletools::forecast()` does, so the converted fable
   previously had a silently `NULL` point forecast.

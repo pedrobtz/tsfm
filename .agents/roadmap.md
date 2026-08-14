@@ -567,8 +567,13 @@ Local close-out on 2026-08-13:
   the engine boundary, so the two spellings of `0.1 … 0.9` in circulation — the
   catalogue's `seq()` and `config.json`'s literals, which differ at `0.3` and
   `0.7` — both select the correct output channels;
-- context truncation is per series and horizon-aware, so a forecast never
-  depends on the batch it was grouped into;
+- context truncation is per series and horizon-aware, so a forecast carries no
+  structural dependence on the batch it was grouped into. Bit-exact independence
+  is not claimed and is not achievable: the batch dimension changes the shapes
+  BLAS reduces over, which moved results by 2 float32 ulps on Linux x86 while
+  being exact on arm64. The tests assert agreement within the float32 budget,
+  which a genuine regression to batch-wide truncation exceeds by four orders of
+  magnitude;
 - `tsfm_check_architecture()` passes all ten applicable checks against the real
   handle; repeated inference is bit-identical and silent;
 - unsupported config variants, missing or mismatched tensors, and device/handle

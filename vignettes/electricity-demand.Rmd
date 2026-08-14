@@ -1,0 +1,227 @@
+---
+title: "A real forecast: electricity demand, against the tidyverts"
+output: rmarkdown::html_vignette
+bibliography: references.bib
+vignette: >
+  %\VignetteIndexEntry{A real forecast: electricity demand, against the tidyverts}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", eval = FALSE)
+```
+
+The other vignettes show the API. This one asks a harder question: **is the
+foundation model actually any good?**
+
+We forecast Victorian daily electricity demand with TimesFM 2.5 and put it in
+the same mable as seasonal naive, ETS, and ARIMA, then score all four on held-out
+data with `fabletools::accuracy()`. Nothing here is special-cased for `tsfm` — the
+foundation model is just another column.
+
+Chunks are not evaluated when the vignette is built, because that would download
+a 925 MB checkpoint during `R CMD check`. Every output below was produced by
+running the code as written.
+
+## Why electricity demand
+
+Time-series foundation models are pretrained on large corpora and then applied
+without task-specific training. TimesFM is a decoder-only transformer pretrained
+on roughly 100 billion time points, and its authors report zero-shot accuracy
+close to supervised models trained per dataset [@das2024timesfm]. Chronos reports
+a similar pattern from a different architecture [@ansari2024chronos].
+
+Where that holds up varies a lot by data, and the benchmark literature is
+specific about it. GIFT-Eval evaluates across seven domains and a range of
+frequencies precisely because performance is not uniform [@aksu2024gifteval].
+Energy is one of the domains where these models tend to do well: daily and
+hourly load has strong, stable multi-scale seasonality and long history. Reviews
+of foundation models in power-system forecasting treat load as a leading
+application while being clear that classical methods remain competitive in
+places [@zater2026power].
+
+The other half of that literature matters just as much. Foundation models are
+*not* uniformly better — statistical baselines remain hard to beat at very high
+frequencies and on short histories, and benchmark work repeatedly recommends
+scoring against naive and seasonal-naive baselines before trusting a foundation
+model [@aksu2024gifteval]. That is exactly what this vignette does, and it is
+why `SNAIVE()` is in the comparison rather than a formality.
+
+So this is a favourable case, chosen deliberately. Run the same comparison on
+your own series before concluding anything about it.
+
+## The data
+
+`tsibbledata::vic_elec` is half-hourly operational demand for Victoria,
+Australia, 2012–2014, from the Monash Time Series Forecasting Archive
+[@godahewa2021monash]. We aggregate to daily totals in gigawatt-hours, which
+leaves a clean weekly cycle plus a strong annual temperature effect.
+
+```{r}
+library(tsfm)
+library(tsibbledata)
+library(tsibble)
+library(fable)
+library(dplyr)
+
+daily <- vic_elec |>
+  index_by(Date = as.Date(Time)) |>
+  summarise(Demand = sum(Demand) / 1000) |>
+  filter(Date >= as.Date("2012-01-01"))
+
+daily
+#> # A tsibble: 1,096 x 2 [1D]
+#>   Date       Demand
+#>   <date>      <dbl>
+#> 1 2012-01-01   228.
+#> 2 2012-01-02   275.
+#> 3 2012-01-03   259.
+#> # ℹ 1,093 more rows
+```
+
+Hold out the last 28 days:
+
+```{r}
+h <- 28
+train <- daily |> filter(Date <= max(Date) - h)
+# 1,068 training days, 28 held out
+```
+
+## Four models, one mable
+
+`TSFM()` is a `fabletools` model definition, so it composes with everything else
+in the tidyverts. Note that only three of these four are *fitted*: TimesFM is
+zero-shot, so its "training" just binds the history for the key.
+
+```{r}
+fits <- model(
+  train,
+  snaive  = SNAIVE(Demand ~ lag("week")),
+  ets     = ETS(Demand),
+  arima   = ARIMA(Demand),
+  timesfm = TSFM(Demand,
+                 model_id = "google/timesfm-2.5-200m-pytorch",
+                 device = "cpu")
+)
+
+fits
+#> # A mable: 1 x 4
+#>     snaive           ets                             arima         timesfm
+#>    <model>       <model>                           <model>         <model>
+#> 1 <SNAIVE> <ETS(M,Ad,M)> <ARIMA(0,0,1)(0,1,1)[7] w/ drift> <TSFM[timesfm]>
+```
+
+`fabletools` selected `ETS(M,Ad,M)` and `ARIMA(0,0,1)(0,1,1)[7] w/ drift` on its
+own — both picked up the weekly seasonality.
+
+If `arima` comes back as `<NULL model>` with a warning, install `urca`:
+`fable::ARIMA()` needs it for unit-root tests, it is only suggested by `fable`,
+and `fabletools::model()` degrades a failed fit to a null model rather than
+erroring so that one bad column cannot discard the rest of the mable. That is
+usually the cause, not the data.
+
+Forecasting and scoring is the ordinary tidyverts workflow:
+
+```{r}
+fc <- forecast(fits, h = h)
+accuracy(fc, daily) |> arrange(RMSE)
+```
+
+| `.model`  |   RMSE |    MAE |  MAPE |  MASE |
+|-----------|-------:|-------:|------:|------:|
+| `timesfm` |  14.16 |   6.82 |  4.53 | 0.472 |
+| `arima`   |  29.18 |  17.41 | 10.92 | 1.203 |
+| `ets`     |  31.85 |  19.89 | 12.34 | 1.375 |
+| `snaive`  |  33.64 |  23.24 | 13.86 | 1.607 |
+
+Zero-shot TimesFM roughly halves the error of the best fitted classical model on
+this window. Read MASE first: it scales error by the in-sample seasonal-naive
+benchmark, so **below 1 is better than seasonal naive**. TimesFM is at 0.47;
+ARIMA and ETS are both above 1, meaning that on these 28 days they did worse
+than the naive benchmark they were fitted to beat.
+
+Two honest caveats. This is a single 28-day window, so treat it as one
+observation, not an estimate of expected performance — `fabletools::stretch_tsibble()`
+gives proper rolling-origin evaluation, and `vignette("rolling-origin-tuning")`
+shows that pattern. And the checkpoint was pretrained on a large corpus whose
+exact contents are not public, so contamination cannot be ruled out for a public
+benchmark dataset like this one.
+
+## Prediction intervals
+
+The forecast carries predictive quantiles, not just a point:
+
+```{r}
+tf <- fc |> filter(.model == "timesfm")
+quantile(tf$Demand, 0.1)   #> 221.6 206.6 186.8 ...
+quantile(tf$Demand, 0.5)   #> 230.4 214.8 194.0 ...
+quantile(tf$Demand, 0.9)   #> 240.9 225.5 204.9 ...
+
+hilo(tf, 60)
+#> # A tsibble: 3 x 5 [1D]
+#>   .model  Date            Demand .mean                  `60%`
+#>   <chr>   <date>          <dist> <dbl>                 <hilo>
+#> 1 timesfm 2014-12-04 quantile[3]  231. [223.7762, 238.2957]60
+#> 2 timesfm 2014-12-05 quantile[3]  215. [208.6656, 222.8651]60
+#> 3 timesfm 2014-12-06 quantile[3]  195. [188.6090, 202.1633]60
+```
+
+`hilo(tf, 80)` is the one to watch out for: it returns an `NA` lower bound.
+`hilo()` computes `(1 - 80/100)/2`, which in floating point is
+`0.09999999999999998` — about two ulps *below* `0.1`. TimesFM's lowest trained
+quantile is exactly `0.1`, and `distributional` will not extrapolate past the
+outermost percentile it holds, so the lower bound comes back missing. Widening
+the request does not help, because the checkpoint emits only `0.1` through `0.9`
+and nothing outside. Use an interval that lands inside the trained grid, as
+above, or read the quantiles directly.
+
+## Where the point forecast lives
+
+`fabletools` derives `.mean` from the distribution, so for a `TSFM()` fable it is
+the distribution's *mean*. The engine's own point forecast is the exactly
+evaluated median, which `median()` recovers on any route:
+
+```{r}
+median(tf$Demand)
+```
+
+The plain-R and `as_fable()` routes report that median in `.mean` directly. The
+distributions are identical across routes; only the summary differs.
+
+## Scaling to a panel
+
+`fabletools` evaluates one key at a time, so `TSFM()` runs the engine once per
+series. The checkpoint is loaded once and reused from the resident cache, but the
+forward passes are not batched. For a wide panel — `aus_retail` has 152 series —
+the batched route is much faster:
+
+```{r}
+retail_fc <- forecast(
+  tsfm_pretrained("google/timesfm-2.5-200m-pytorch", device = "cpu"),
+  aus_retail, h = 12,
+  index = "Month", key = "Series ID", target = "Turnover"
+)
+nrow(retail_fc)                      #> 1824  (152 series x 12 months)
+fabletools::as_fable(retail_fc)
+```
+
+All 152 series in one batched call takes about 10 seconds on CPU, including
+loading the checkpoint.
+
+Use `TSFM()` when you want the model *inside* a mable next to other models, as
+above; use `forecast()` plus `as_fable()` when you want throughput.
+
+## What to take from this
+
+On daily electricity demand — long history, strong seasonality, a domain the
+literature flags as favourable — a zero-shot foundation model beat three fitted
+classical models by a wide margin, with no tuning and no training.
+
+That result is real but narrow. The same benchmark literature that reports strong
+zero-shot performance also reports that these models lose to simple baselines on
+short, noisy, or very high-frequency series. `tsfm` is built so the comparison
+above is cheap to run: put `TSFM()` in the mable next to `SNAIVE()` and let
+`accuracy()` settle it on your data.
+
+## References

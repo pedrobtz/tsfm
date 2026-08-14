@@ -99,8 +99,12 @@ fabletools::forecast(fits, h = 6)
 ```
 
 Swap `"stub"` for `"google/timesfm-2.5-200m-pytorch"` and the same code runs the
-real checkpoint — see `vignette("timesfm-zero-shot")`, plus
-`vignette("zero-shot-workflow")` and `vignette("rolling-origin-tuning")`.
+real checkpoint.
+
+Vignettes: `vignette("timesfm-zero-shot")` walks the whole public surface on a
+real checkpoint; `vignette("electricity-demand")` scores it against seasonal
+naive, ETS, and ARIMA on held-out data; `vignette("zero-shot-workflow")` and
+`vignette("rolling-origin-tuning")` cover the engine and tuning with the stub.
 
 ## Adding an architecture
 

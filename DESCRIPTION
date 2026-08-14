@@ -32,6 +32,8 @@ Imports:
     vctrs
 Suggests:
     dials,
+    dplyr,
+    fable,
     fabletools,
     hardhat,
     knitr,
@@ -40,6 +42,7 @@ Suggests:
     rsample,
     testthat (>= 3.0.0),
     tsibble,
+    tsibbledata,
     tune,
     workflows,
     yardstick

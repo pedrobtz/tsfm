@@ -103,12 +103,17 @@ test_that("real TimesFM is conforming, deterministic, and silent", {
   )
   expect_equal(unsupported$supported, seq(0.1, 0.9, by = 0.1))
 
-  # A forecast may not depend on which series share its batch.
+  # A forecast may not depend on which series share its batch. Asserted within
+  # the float32 budget, not bit-exactly: the batch dimension changes the shapes
+  # BLAS reduces over, which moves results by a couple of ulps on some
+  # architectures. The regression this guards against --- truncating every series
+  # to the batch's longest horizon --- would drop hundreds of observations of
+  # context and move the forecast by orders of magnitude more than that.
   solo <- model$predict_batch_fn(list(context), 6L, c(0.1, 0.5, 0.9), "cpu")
   mixed <- model$predict_batch_fn(
     list(context, context), c(6L, 512L), c(0.1, 0.5, 0.9), "cpu"
   )
-  expect_equal(mixed[[1]], solo[[1]])
+  expect_close_f32(mixed[[1]], solo[[1]])
   report <- tsfm_check_architecture(
     function(config, weights) model,
     context = context,
