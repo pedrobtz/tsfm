@@ -45,6 +45,12 @@ def generated_context(spec: dict) -> np.ndarray:
     return (50.0 + 0.002 * x + 2.0 * np.sin(x * 2.0 * np.pi / 24.0)).astype(
       np.float32
     )
+  if kind == "mixed_sign":
+    # Crosses zero repeatedly and ends below it. The official decoder only
+    # clamps forecasts to be non-negative when every observed value is
+    # non-negative, so a series like this is the one that exercises the other
+    # branch --- and every other fixture here is strictly positive.
+    return (3.0 * np.sin(x * 2.0 * np.pi / 16.0) - 0.05 * x).astype(np.float32)
   raise ValueError(f"Unknown context generator: {kind}")
 
 
@@ -80,6 +86,14 @@ def fixture_cases() -> list[dict]:
       # patch. 16,256 is therefore the largest context with context+horizon
       # still inside the 16,384 token limit.
       "max_context": 16256,
+    },
+    {
+      "name": "mixed_sign",
+      "contexts": [
+        {"kind": "mixed_sign", "length": 96},
+      ],
+      "horizon": 12,
+      "max_context": 96,
     },
     {
       "name": "batch_agreement",

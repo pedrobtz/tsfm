@@ -128,6 +128,55 @@ test_that("journey 4: parsnip fit() and predict()", {
   expect_true(all(is.finite(preds$.pred)))
 })
 
+test_that("forecasts are antisymmetric under sign flip", {
+  record <- skip_unless_checkpoint()
+  model <- tsfm_pretrained(record$model_id, revision = record$revision,
+                           device = "cpu")
+  # The port symmetrises a forward and a flipped pass (force_flip_invariance),
+  # so on a mixed-sign series --- where the positivity clamp applies to neither
+  # direction --- f(-x) must be -f(x) with the quantile channels reversed. This
+  # needs no reference fixture, and it fails loudly if timesfm_channel_layout()
+  # ever reverses the wrong range.
+  set.seed(11L)
+  mixed <- as.numeric(sin(seq_len(96) / 6) * 10 + stats::rnorm(96))
+  levels <- c(0.1, 0.5, 0.9)
+
+  q <- model$predict_fn(mixed, 12L, levels)
+  flipped <- model$predict_fn(-mixed, 12L, levels)
+  expect_equal(flipped, -q[, rev(seq_along(levels)), drop = FALSE])
+
+  # A series carrying negatives must not be clamped at zero.
+  expect_true(any(q < 0) || any(flipped < 0))
+})
+
+test_that("accelerator inference agrees with the CPU baseline", {
+  record <- skip_unless_checkpoint()
+  device <- if (isTRUE(tryCatch(torch::backends_mps_is_available(),
+                               error = function(e) FALSE))) {
+    "mps"
+  } else if (isTRUE(tryCatch(torch::cuda_is_available(),
+                             error = function(e) FALSE))) {
+    "cuda"
+  } else {
+    NA_character_
+  }
+  skip_if(is.na(device), "No accelerator available on this host.")
+
+  set.seed(12L)
+  context <- as.numeric(100 + cumsum(stats::rnorm(96)))
+  levels <- c(0.1, 0.5, 0.9)
+
+  cpu <- tsfm_pretrained(record$model_id, revision = record$revision,
+                         device = "cpu")$predict_fn(context, 12L, levels)
+  accel <- tsfm_pretrained(record$model_id, revision = record$revision,
+                           device = device)$predict_fn(context, 12L, levels)
+
+  expect_true(all(is.finite(accel)))
+  # Deliberately looser than the CPU fixture budget: cross-device reassociation
+  # runs to a few tens of ulps, above PyTorch's float32 rtol default.
+  expect_close_f32(accel, cpu, atol = 1e-3, rtol = 1e-5)
+})
+
 test_that("the composed and batched routes agree on one series", {
   record <- skip_unless_checkpoint()
   skip_if_not_installed("fabletools")

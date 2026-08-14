@@ -202,6 +202,29 @@ ID, immutable revision, resolved device, and every load-affecting option.
 reuse. `reuse = FALSE` constructs a fresh handle without changing the existing
 cached handle or deleting downloaded files.
 
+## Known limitations
+
+- **Contract v1 is univariate and quantile-only.** No covariates, multivariate
+  targets, sample paths, or fine-tuning. These are declared `FALSE` and rejected
+  before inference rather than silently ignored.
+- **CPU is the certified baseline.** CUDA and MPS resolve and run, but are not
+  numerically certified; the parity fixtures are CPU references. A handle is
+  bound to the device it was loaded on and refuses inference on another.
+- **`TSFM()` is not batched.** fabletools evaluates one key at a time. Use
+  `forecast(model, panel, h) |> fabletools::as_fable()` for throughput.
+- **`.mean` differs by route.** fabletools derives it from the distribution, so
+  a `TSFM()` fable reports the distribution's mean where the other routes report
+  the engine's exact median. `median()` recovers the point forecast anywhere.
+- **`hilo()` can return an `NA` bound.** `fabletools::hilo(fc, 80)` computes
+  `(1 - 80/100)/2`, which lands two ulps below `0.1`; `distributional`'s
+  percentile distribution does not extrapolate past its outermost stored
+  percentile and returns `NA`. This is upstream behaviour. Request levels that
+  bracket the interval you need, or read quantiles from the forecast directly.
+- **Effective context shrinks with the horizon** — see the table above.
+- **Reference fixtures are not bit-reproducible across machines.** Regenerating
+  under the same pinned environment on different hardware moves expected outputs
+  by a couple of float32 ulps, which is why parity uses an `atol`/`rtol` budget.
+
 ## Scope
 
 `tsfm` owns the model layer and thin adapters only. Backtesting, metrics,

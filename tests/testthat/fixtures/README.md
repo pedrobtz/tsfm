@@ -38,8 +38,14 @@ fixtures/
     ├── typical.json + typical-context-1.f32
     ├── short_context.json + short_context-context-1.f32
     ├── context_truncation.json + context_truncation-context-1.f32
+    ├── mixed_sign.json + mixed_sign-context-1.f32
     └── batch_agreement.json + two batch_agreement-context-*.f32 files
 ```
+
+`mixed_sign` exists for one reason: the official decoder clamps forecasts at
+zero only when every observed value is non-negative, and every other context
+here is strictly positive. Without it the unclamped branch has no reference
+behaviour attached to it. Its forecast is entirely negative.
 
 ## Fixture schema (`*.json`)
 
@@ -73,9 +79,12 @@ The generator is `.agents/generate-timesfm-reference.py`; its Python packages
 are locked in `.agents/timesfm-reference-requirements.txt`. It refuses to run
 unless `TIMESFM_SOURCE` is exactly the recorded source commit.
 
+The locked environment needs Python 3.11: `torch==2.2.2` publishes no wheels for
+newer interpreters, so a current system Python cannot build it.
+
 ```sh
-python -m venv .venv-timesfm-reference
-.venv-timesfm-reference/bin/pip install \
+uv venv --python 3.11 .venv-timesfm-reference
+uv pip install --python .venv-timesfm-reference/bin/python \
   -r .agents/timesfm-reference-requirements.txt
 TIMESFM_SOURCE=/path/to/pinned/timesfm \
 TIMESFM_CHECKPOINT=/path/to/model.safetensors \
@@ -83,6 +92,23 @@ TIMESFM_CHECKPOINT=/path/to/model.safetensors \
   .agents/generate-timesfm-reference.py \
   tests/testthat/fixtures/timesfm
 ```
+
+The upstream checkout needs `GIT_LFS_SKIP_SMUDGE=1`, or the LFS filters disabled,
+if `git-lfs` is not installed; the Python sources themselves are not LFS objects.
+
+### Regeneration is not bit-reproducible
+
+The `.f32` inputs regenerate byte-identically, but the expected outputs do not.
+Rerunning the pinned environment on a different machine on 2026-08-14 moved them
+by up to 2 float32 ulps (`1.53e-05` absolute, `1.36e-07` relative) — the
+reference implementation is not bit-reproducible across CPU architectures. This
+is exactly why parity is asserted against an `atol`/`rtol` budget.
+
+The practical consequence: **do not regenerate existing fixtures casually.** A
+rerun on a new host rewrites every expected value by a few ulps, producing a
+large diff that carries no information. Regenerate when the pinned source or
+checkpoint changes; to add a case, generate into a scratch directory and copy in
+only the new files.
 
 The two-series fixture also evaluates each context separately and records the
 maximum batch/loop difference. Fixture generation is outside CI. Replay is

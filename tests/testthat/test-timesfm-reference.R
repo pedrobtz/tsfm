@@ -16,7 +16,8 @@ test_that("TimesFM golden fixtures cover the Stage 2 reference cases", {
 
   expect_setequal(
     names(fixtures),
-    c("typical", "short_context", "context_truncation", "batch_agreement")
+    c("typical", "short_context", "context_truncation", "batch_agreement",
+      "mixed_sign")
   )
   for (fixture in fixtures) {
     expect_identical(
@@ -71,4 +72,22 @@ test_that("the reference generator and lock file carry every immutable pin", {
   expect_true(any(grepl("torch==2.2.2", requirements, fixed = TRUE)))
   expect_true(any(grepl("safetensors==0.5.3", requirements, fixed = TRUE)))
   expect_true(any(grepl("huggingface_hub==0.36.0", requirements, fixed = TRUE)))
+})
+
+test_that("the fixture set covers a series that crosses zero", {
+  path <- testthat::test_path("fixtures", "timesfm", "mixed_sign.json")
+  expect_true(file.exists(path))
+  fx <- jsonlite::fromJSON(path, simplifyVector = TRUE)
+
+  ctx_path <- testthat::test_path("fixtures", "timesfm", fx$context_files[[1]])
+  ctx <- readBin(ctx_path, "numeric",
+                 n = unname(file.info(ctx_path)$size) %/% 4L,
+                 size = 4L, endian = "little")
+  # The point of this fixture: the official decoder only clamps forecasts at
+  # zero when every observed value is non-negative. Every other committed
+  # context is strictly positive, so without this one the unclamped branch has
+  # no reference behaviour attached to it at all.
+  expect_true(any(ctx < 0))
+  expect_true(any(ctx > 0))
+  expect_true(any(fx$expected_quantiles < 0))
 })

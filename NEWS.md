@@ -123,10 +123,19 @@ model-loading and forecasting shell.
   `context_length - ceiling(h / 128) * 128`; `max_context` reports the h ≤ 128
   best case, and the README tabulates the rest.
 
-* Added four compact, committed TimesFM reference fixtures from the pinned
-  official implementation: typical, short-context, context-truncation, and
-  two-series batch/loop cases. The locked generator records every forecast
-  flag and upstream dependency pin.
+* Added five compact, committed TimesFM reference fixtures from the pinned
+  official implementation: typical, short-context, context-truncation,
+  mixed-sign, and two-series batch/loop cases. The locked generator records
+  every forecast flag and upstream dependency pin.
+* The mixed-sign fixture closes a real coverage gap. The official decoder clamps
+  forecasts at zero only when every observed value is non-negative, and every
+  other committed context is strictly positive, so the unclamped branch had no
+  reference behaviour attached to it. Its forecast is entirely negative.
+* Regenerating the fixtures reproduces the `.f32` inputs byte-identically but
+  not the expected outputs: the same pinned environment on different hardware
+  moves them by up to 2 float32 ulps. The reference implementation is not
+  bit-reproducible across CPU architectures, which is why parity is asserted
+  against an `atol`/`rtol` budget. Do not regenerate existing fixtures casually.
 * Captured and validated the exact pinned TimesFM state layout: 232 float32
   tensors and 231,289,280 parameters. The full 925,181,104-byte checkpoint
   loads into a named R state dict and native module.

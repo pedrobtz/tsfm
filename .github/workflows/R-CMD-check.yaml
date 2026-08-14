@@ -4,6 +4,7 @@ on:
   push:
     branches: [main, master]
   pull_request:
+  workflow_dispatch:
 
 name: R-CMD-check.yaml
 
@@ -58,7 +59,63 @@ jobs:
         run: Rscript -e 'torch::install_torch()'
         shell: bash
 
+      # Note that no job here sets TSFM_RUN_CHECKPOINT_TEST. R CMD check stays
+      # network-free and CRAN-shaped on every configuration; the checkpoint gate
+      # is the separate `parity` job below, so a failed 925 MB download can never
+      # be mistaken for a failed package check.
       - uses: r-lib/actions/check-r-package@v2
         with:
           upload-snapshots: true
           build_args: 'c("--no-manual","--compact-vignettes=gs+qpdf")'
+
+  # The numerical-parity gate: replay the committed golden fixtures against the
+  # real pinned checkpoint. This is the only test that proves the port computes
+  # the right model rather than merely a well-formed one, so it deserves to be a
+  # job whose name says what failed.
+  #
+  # Kept off pull requests: it needs a ~925 MB download and several minutes even
+  # warm. Structural invariants of the same code path --- flip antisymmetry, the
+  # positivity clamp, batch/loop agreement, per-series truncation --- run without
+  # any download on the LibTorch job above (test-timesfm-synthetic.R), so a PR is
+  # not flying blind without this.
+  parity:
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    name: numerical parity (pinned checkpoint)
+
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: 'release'
+
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: any::testthat, any::pkgload
+          needs: check
+
+      - name: Install the LibTorch runtime
+        run: Rscript -e 'torch::install_torch()'
+
+      # Keyed on the pinned revision, so the download happens once and bumping
+      # the checkpoint invalidates the cache by construction rather than by
+      # someone remembering to clear it.
+      - name: Cache the pinned checkpoint
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-timesfm-1d952420fba87f3c6dee4f240de0f1a0fbc790e3
+
+      # Explicit, and before the tests, so a Hub outage or a size mismatch fails
+      # here with a download error instead of surfacing as a parity failure.
+      - name: Prefetch the checkpoint
+        run: Rscript -e 'pkgload::load_all("."); tsfm_download("google/timesfm-2.5-200m-pytorch")'
+
+      - name: Run the checkpoint-gated suite
+        env:
+          TSFM_RUN_CHECKPOINT_TEST: 'true'
+        run: Rscript -e 'pkgload::load_all("."); testthat::test_local(".", stop_on_failure = TRUE)'

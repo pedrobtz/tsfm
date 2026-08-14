@@ -11,15 +11,16 @@ This roadmap is release-driven. It defines exactly what `0.1.0` means, the
 ordered stages required to reach it, and the work deliberately deferred until
 after it.
 
-*Last reviewed: 2026-08-13.*
+*Last reviewed: 2026-08-14.*
 
 ---
 
 ## Current status
 
-The engine now runs the pinned TimesFM 2.5 checkpoint natively and passes its
-architecture-conformance and numerical-parity gates. User-facing adapter
-workflows remain the next release gate.
+The engine runs the pinned TimesFM 2.5 checkpoint natively, passes its
+architecture-conformance and numerical-parity gates, and serves all four
+required user workflows. GitHub Actions is green on `main` across five
+configurations. Release hardening is the remaining gate.
 
 | Architecture | Current state | `0.1.0` role |
 |---|---|---|
@@ -35,20 +36,19 @@ The repository already contains useful foundations:
 - a versioned architecture contract and executable conformance harness;
 - panel batching, context truncation, and CPU/CUDA/MPS device resolution;
 - a quantile-based `tsfm_forecast` object backed by `distributional`;
-- plain-R, fabletools conversion, and tidymodels adapter code;
-- stub-based tests of the core execution path.
+- plain-R, fabletools conversion, `TSFM()` composition, and tidymodels adapters;
+- stub-based tests of the core execution path, plus opt-in real-checkpoint
+  smoke tests covering all four user journeys.
 
 The important remaining gaps are:
 
 - TTM has no weight map, module, or forward pass and remains outside `0.1.0`;
 - the current contract cannot carry covariates, multivariate targets, or sample
   paths; these capability records correctly remain `FALSE`;
-- there is no `TSFM()` model definition for composition inside
-  `fabletools::model()`;
-- real-checkpoint smoke tests have not yet exercised the plain-R, fabletools,
-  and parsnip user journeys end to end;
-- README and vignette examples still need Stage 4 workflow validation;
-- GitHub Actions on `main` is blocked by account billing/spending configuration.
+- CI proves the deterministic suite on five configurations and the native torch
+  paths on one, but the numerical-parity gate needs the 925 MB checkpoint and is
+  opt-in; a cached-checkpoint CI job is staged and not yet observed green;
+- release mechanics remain: version, release notes, and tag.
 
 These gaps determine the stages below.
 
@@ -301,12 +301,12 @@ when its exit gate is executable and green.
 
 | Stage | Outcome | Status |
 |---|---|---|
-| 0 | Establish an honest, reproducible baseline | **Closed locally; remote baseline pending** |
-| 1 | Prove TimesFM feasibility; freeze catalogue and error contracts | **Complete locally; CI pending** |
-| 2 | Build the reference, loader, download API, and handle LRU | **Complete locally; CI pending** |
-| 3 | Implement safe native TimesFM inference | **Complete locally; CI pending** |
-| 4 | Prove all four user-facing workflows | **Complete locally; CI pending** |
-| 5 | Validate consumer compatibility and release `0.1.0` | Not started |
+| 0 | Establish an honest, reproducible baseline | **Complete; CI green** |
+| 1 | Prove TimesFM feasibility; freeze catalogue and error contracts | **Complete; CI green** |
+| 2 | Build the reference, loader, download API, and handle LRU | **Complete; CI green** |
+| 3 | Implement safe native TimesFM inference | **Complete; CI green** |
+| 4 | Prove all four user-facing workflows | **Complete; CI green** |
+| 5 | Validate consumer compatibility and release `0.1.0` | **Hardening complete; release mechanics pending** |
 
 ### Stage 0 — Honest baseline
 
@@ -344,11 +344,13 @@ Local close-out on 2026-08-13:
   errors, 0 warnings, and one environmental NOTE because the check host could
   not verify its current time.
 
-The remote exit-gate item remains pending: commit `92464af` on `main` has no
-recorded workflow run or combined status, and these local changes have not been
-published. On 2026-08-13 the local baseline was accepted as the Stage 0 closure
-point so implementation could advance; publishing it and recording the remote
-check remain explicit follow-up work rather than an unrecorded assumption.
+The remote exit-gate item closed on 2026-08-14. The work was published and
+GitHub Actions ran on `main` for the first time since the billing block. The
+first run failed identically on all five configurations — three tests executed
+tensors while guarding only on the presence of the torch R package, not the
+separately downloaded LibTorch runtime, which CI does not have. With those
+guards corrected the run is green on macOS, Windows, and Ubuntu devel, release,
+and oldrel-1.
 
 ### Stage 1 — TimesFM feasibility, release contract, and catalogue
 
@@ -426,7 +428,7 @@ Local close-out on 2026-08-13:
 - the complete test suite passes and a built-package `R CMD check`, including
   vignettes, reports 0 errors, 0 warnings, and 0 notes.
 
-The remote CI result remains pending until these local changes are published.
+Published; GitHub Actions is green on `main` across all five configurations.
 
 ### Stage 2 — TimesFM reference and loading pipeline
 
@@ -473,11 +475,16 @@ Exit gate:
 Local close-out on 2026-08-13:
 
 - `.agents/generate-timesfm-reference.py` imports the exact source commit and
-  uses a locked NumPy/PyTorch/Hugging Face/safetensors environment; regeneration
-  of all committed JSON fixtures is byte-identical;
-- four compact golden fixtures record the official forecast flags and outputs
-  for typical, three-value short-context, 16,270-value truncation, and
-  two-series batch/loop cases; the largest observed reference batch/loop
+  uses a locked NumPy/PyTorch/Hugging Face/safetensors environment. Regenerating
+  reproduces the `.f32` inputs byte-identically, but **not** the expected
+  outputs: on 2026-08-14 a rerun under the same pinned environment on a
+  different machine moved them by up to 2 float32 ulps (`1.53e-05` absolute,
+  `1.36e-07` relative). The reference implementation is not bit-reproducible
+  across CPU architectures, which is why parity is asserted against an
+  `atol`/`rtol` budget rather than exact equality;
+- five compact golden fixtures record the official forecast flags and outputs
+  for typical, three-value short-context, 16,270-value truncation, mixed-sign,
+  and two-series batch/loop cases; the largest observed reference batch/loop
   difference is `1.52587890625e-05`, inside the fixture budget of
   `atol = 1e-4, rtol = 1e-5`;
 - the pinned `config.json` is captured and `timesfm_expected_state_spec()`
@@ -637,7 +644,7 @@ Local close-out on 2026-08-13:
 - the deterministic suite covers the stub-backed `TSFM()` workflow, and a
   built-package `R CMD check` including vignettes reports 0/0/0.
 
-Stage 5 owns release hardening. The remote CI result remains pending.
+Stage 5 owns release hardening. GitHub Actions is green on `main`.
 
 ### Stage 5 — Release hardening
 
@@ -668,6 +675,34 @@ Exit gate:
 - source-tarball and CI checks have zero errors and zero warnings, all required
   tests pass, the README example works, and no public claim exceeds an
   executable test.
+
+Local close-out on 2026-08-14, release mechanics excepted:
+
+- `R CMD check` on the built source tarball reports 0 errors, 0 warnings, 0
+  notes, with vignettes enabled; the same commit is green on GitHub Actions
+  across macOS, Windows, and Ubuntu devel/release/oldrel-1;
+- a second check with `_R_CHECK_DEPENDS_ONLY_=true` is also 0/0/0, proving the
+  core installs and its tests run with only the declared Imports;
+- the tarball was installed into an empty library and all four documented user
+  journeys ran against the real checkpoint from that clean install;
+- every relative Markdown link across the seven maintained documents resolves;
+- `cran-comments.md` now records the actual check results, the LibTorch
+  situation, and the opt-in scope of the checkpoint tests;
+- known limitations are recorded in the README, including the contract-v1
+  boundaries, the CPU-only certification, the per-key `TSFM()` path, the
+  route-dependent `.mean`, and the upstream `hilo()` `NA` bound;
+- consumer requirements R1–R5 are implemented and tested; R5's constructor
+  signature, construction mechanism, return type, optional-dependency handling,
+  and per-key handle reuse match `consumer-api.md` exactly;
+- the deterministic suite is network-free and covers catalogue filtering,
+  structured errors, cache lifecycle, deterministic inference, interrupt
+  cleanup, and the stub-backed `TSFM()` workflow.
+
+Remaining before the tag: observe the cached-checkpoint CI job green so the
+numerical-parity gate runs remotely rather than only locally, then set
+`Version: 0.1.0`, write release notes, and tag. The version is deliberately
+still `0.0.0.9000` — claiming the release before its own CI gate has been seen
+green would be the exact failure mode this roadmap exists to prevent.
 
 ---
 
