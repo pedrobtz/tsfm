@@ -40,4 +40,21 @@ utils::globalVariables(c("object", "new_data"))
       }
     )
   }
+
+  # Register the harus backend when harus is loaded. The registry is optional:
+  # if harus is not installed, nothing happens. tsfm works standalone. If both
+  # are loaded, this makes every pretrained checkpoint available in harus'
+  # model registry without requiring harus to know tsfm's internals.
+  if (requireNamespace("harus", quietly = TRUE)) {
+    tryCatch(
+      tsfm_register_harus_backend(),
+      error = function(e) {
+        # Silent: harus is optional, and its absence is normal. The message is
+        # for debugging only.
+        if (identical(Sys.getenv("TSFM_VERBOSE_LOAD"), "true")) {
+          message("tsfm: could not register harus backend: ", conditionMessage(e))
+        }
+      }
+    )
+  }
 }

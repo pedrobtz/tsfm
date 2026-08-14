@@ -219,3 +219,44 @@ print.model_tsfm <- function(x, ...) {
   cli::cli_text("quantile levels: {.val {x$quantile_levels}}")
   invisible(x)
 }
+
+# -- harus registry ---------------------------------------------------------
+
+#' Register tsfm models in the harus registry
+#'
+#' Called from tsfm's `.onLoad()` when harus is available. Makes every
+#' pretrained checkpoint available in harus' open model registry, so
+#' foundation models are compared directly against statistical and other
+#' backend models using the same conformance gate.
+#'
+#' Each model is registered with its identity and basic capabilities. The
+#' tsfm::TSFM() model definition is the generator, passed through without
+#' modification.
+#'
+#' @keywords internal
+tsfm_register_harus_backend <- function() {
+  models <- tsfm_models()
+  if (nrow(models) == 0L) {
+    return(invisible(character()))
+  }
+
+  for (i in seq_len(nrow(models))) {
+    model_id <- models$model_id[i]
+    harus::harus_register_model(
+      name = model_id,
+      generator = function(response, model_id = model_id, ...) {
+        TSFM(!!response, model_id = model_id, ...)
+      },
+      backend = "tsfm",
+      capabilities = harus::harus_capabilities(
+        min_length = 1L,
+        max_horizon = Inf,
+        requires = "tsfm",
+        probabilistic = TRUE,
+        cost = "medium"
+      ),
+      overwrite = TRUE
+    )
+  }
+  invisible(models$model_id)
+}
